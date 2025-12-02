@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { DataTable } from '@/components/DataTable'
 import { Button } from '@/components/ui/button'
@@ -12,8 +12,9 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Loader2, Plus, Pencil, Trash2 } from 'lucide-react'
+import { Loader2, Plus, Pencil, Trash2, Upload, Download } from 'lucide-react'
 import { ColumnDef } from '@tanstack/react-table'
+import Papa from 'papaparse'
 
 type PracticalAssessment = {
     id: string
@@ -29,6 +30,8 @@ export default function PracticalAssessmentPage() {
     const [loading, setLoading] = useState(true)
     const [editingItem, setEditingItem] = useState<Partial<PracticalAssessment> | null>(null)
     const [open, setOpen] = useState(false)
+    const [importing, setImporting] = useState(false)
+    const fileInputRef = useRef<HTMLInputElement>(null)
     const supabase = createClient()
 
     useEffect(() => {
@@ -83,6 +86,68 @@ export default function PracticalAssessmentPage() {
         if (!error) fetchData()
     }
 
+    const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+        const file = event.target.files?.[0]
+        if (!file) return
+
+        setImporting(true)
+        Papa.parse(file, {
+            header: true,
+            skipEmptyLines: true,
+            complete: async (results) => {
+                const { data: { user } } = await supabase.auth.getUser()
+                if (!user) {
+                    setImporting(false)
+                    return
+                }
+
+                const rows = results.data as any[]
+                const validRows = rows.map(row => {
+                    return {
+                        staff_id: user.id,
+                        student_id: row.student_id || row.StudentId || row.RegisterNo,
+                        observations: parseFloat(row.observations || row.Observations || '0'),
+                        model_test: parseFloat(row.model_test || row.ModelTest || '0'),
+                        record_attendance: parseFloat(row.record_attendance || row.RecordAttendance || '0')
+                    }
+                }).filter(row => row.student_id)
+
+                if (validRows.length > 0) {
+                    const { error } = await supabase.from('assessment_practical').insert(validRows)
+                    if (error) {
+                        alert('Error importing data: ' + error.message)
+                    } else {
+                        alert(`Successfully imported ${validRows.length} records`)
+                        fetchData()
+                    }
+                } else {
+                    alert('No valid records found in CSV')
+                }
+                setImporting(false)
+                if (fileInputRef.current) fileInputRef.current.value = ''
+            },
+            error: (error) => {
+                alert('Error parsing CSV: ' + error.message)
+                setImporting(false)
+            }
+        })
+    }
+
+    const downloadSample = () => {
+        const csvContent = "StudentId,Observations,ModelTest,RecordAttendance\n11199A001,12,13,9\n11199A002,14,11,8"
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
+        const link = document.createElement('a')
+        if (link.download !== undefined) {
+            const url = URL.createObjectURL(blob)
+            link.setAttribute('href', url)
+            link.setAttribute('download', 'practical_assessment_sample.csv')
+            link.style.visibility = 'hidden'
+            document.body.appendChild(link)
+            link.click()
+            document.body.removeChild(link)
+        }
+    }
+
     const columns: ColumnDef<PracticalAssessment>[] = [
         { accessorKey: 'student_id', header: 'Student ID' },
         { accessorKey: 'observations', header: 'Observations (15)' },
@@ -108,12 +173,29 @@ export default function PracticalAssessmentPage() {
 
     return (
         <div className="space-y-6">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
                 <h1 className="text-3xl font-bold">Practical Assessment</h1>
-                <Button onClick={() => { setEditingItem({}); setOpen(true); }}>
-                    <Plus className="w-4 h-4 mr-2" />
-                    Add Entry
-                </Button>
+                <div className="flex items-center gap-2">
+                    <input
+                        type="file"
+                        accept=".csv"
+                        className="hidden"
+                        ref={fileInputRef}
+                        onChange={handleFileUpload}
+                    />
+                    <Button variant="outline" onClick={downloadSample} title="Download Sample CSV">
+                        <Download className="w-4 h-4 mr-2" />
+                        Sample CSV
+                    </Button>
+                    <Button variant="outline" onClick={() => fileInputRef.current?.click()} disabled={importing}>
+                        {importing ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Upload className="w-4 h-4 mr-2" />}
+                        Import CSV
+                    </Button>
+                    <Button onClick={() => { setEditingItem({}); setOpen(true); }}>
+                        <Plus className="w-4 h-4 mr-2" />
+                        Add Entry
+                    </Button>
+                </div>
             </div>
 
             <DataTable columns={columns} data={data} />

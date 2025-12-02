@@ -13,7 +13,8 @@ import {
     GraduationCap,
     FlaskConical,
     Search,
-    LogOut
+    LogOut,
+    Users
 } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { useRouter } from 'next/navigation'
@@ -28,6 +29,7 @@ export const sidebarItems = [
     { name: 'Theory Assessment', href: '/assessment/theory', icon: BookOpen },
     { name: 'Practical Assessment', href: '/assessment/practical', icon: FlaskConical },
     { name: 'Inspections', href: '/inspections', icon: Search },
+    { name: 'Admin', href: '/admin', icon: Users },
 ]
 
 export function Sidebar() {
