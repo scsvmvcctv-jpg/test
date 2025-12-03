@@ -19,7 +19,8 @@ import { Menu, X } from 'lucide-react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { cn } from '@/lib/utils'
-import { sidebarItems } from './Sidebar'
+import { sidebarItems, adminSidebarItems } from './Sidebar'
+import { logoutAction } from '@/app/actions/auth'
 
 export function Header() {
     const router = useRouter()
@@ -27,6 +28,8 @@ export function Header() {
     const supabase = createClient()
     const [user, setUser] = useState<any>(null)
     const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
+
+    const items = pathname.startsWith('/admin') ? adminSidebarItems : sidebarItems
 
     useEffect(() => {
         const getUser = async () => {
@@ -37,6 +40,20 @@ export function Header() {
     }, [])
 
     const handleLogout = async () => {
+        // Check if admin
+        const adminDataStr = localStorage.getItem('adminData')
+        if (adminDataStr) {
+            try {
+                const adminData = JSON.parse(adminDataStr)
+                await logoutAction(adminData.UserId?.trim())
+            } catch (e) {
+                console.error('Error logging out admin:', e)
+            }
+
+            localStorage.removeItem('adminToken')
+            localStorage.removeItem('adminData')
+        }
+
         await supabase.auth.signOut()
         router.push('/login')
         router.refresh()
@@ -92,7 +109,7 @@ export function Header() {
                             </Button>
                         </div>
                         <nav className="flex-1 space-y-2 overflow-y-auto">
-                            {sidebarItems.map((item) => (
+                            {items.map((item) => (
                                 <Link key={item.href} href={item.href} onClick={() => setIsMobileMenuOpen(false)}>
                                     <Button
                                         variant="ghost"

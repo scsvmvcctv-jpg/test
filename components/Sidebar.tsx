@@ -18,6 +18,7 @@ import {
 } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { useRouter } from 'next/navigation'
+import { logoutAction } from '@/app/actions/auth'
 
 export const sidebarItems = [
     { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
@@ -29,7 +30,10 @@ export const sidebarItems = [
     { name: 'Theory Assessment', href: '/assessment/theory', icon: BookOpen },
     { name: 'Practical Assessment', href: '/assessment/practical', icon: FlaskConical },
     { name: 'Inspections', href: '/inspections', icon: Search },
-    { name: 'Admin', href: '/admin', icon: Users },
+]
+
+export const adminSidebarItems = [
+    { name: 'Dashboard', href: '/admin', icon: LayoutDashboard },
 ]
 
 export function Sidebar() {
@@ -38,10 +42,26 @@ export function Sidebar() {
     const supabase = createClient()
 
     const handleLogout = async () => {
+        // Check if admin
+        const adminDataStr = localStorage.getItem('adminData')
+        if (adminDataStr) {
+            try {
+                const adminData = JSON.parse(adminDataStr)
+                await logoutAction(adminData.UserId?.trim())
+            } catch (e) {
+                console.error('Error logging out admin:', e)
+            }
+
+            localStorage.removeItem('adminToken')
+            localStorage.removeItem('adminData')
+        }
+
         await supabase.auth.signOut()
         router.push('/login')
         router.refresh()
     }
+
+    const items = pathname.startsWith('/admin') ? adminSidebarItems : sidebarItems
 
     return (
         <div className="hidden md:flex flex-col h-screen w-64 bg-gradient-to-b from-blue-900 to-blue-800 text-white border-r border-blue-700 shadow-xl">
@@ -56,7 +76,7 @@ export function Sidebar() {
                 <h1 className="text-lg font-bold text-center text-white tracking-wide">SCSVMV-LOG-BOOK</h1>
             </div>
             <nav className="flex-1 px-4 space-y-2 overflow-y-auto py-4">
-                {sidebarItems.map((item) => (
+                {items.map((item) => (
                     <Link key={item.href} href={item.href}>
                         <Button
                             variant="ghost"

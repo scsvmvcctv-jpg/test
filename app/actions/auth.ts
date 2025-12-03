@@ -6,25 +6,88 @@ import { cookies } from 'next/headers'
 export async function loginAction(prevState: any, formData: FormData) {
     const userId = formData.get('email') as string // Reusing the email field for UserID
     const password = formData.get('password') as string
+    const userType = formData.get('userType') as string || 'Staff'
 
     if (!userId || !password) {
         return { error: 'Missing UserID or Password' }
     }
 
     try {
-        // 1. Call External API
-        const response = await fetch('http://14.139.187.54:443/api/auth', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ UserID: userId, Password: password }),
-        })
-
-        if (!response.ok) {
-            const errorData = await response.json().catch(() => ({}))
-            return { error: errorData.error || 'Invalid UserID or Password (External)' }
+        let apiUrl = 'http://14.139.187.54:443/api/auth';
+        if (userType === 'Supervisor') {
+            // Use local API for Supervisor to ensure updated logic is used
+            apiUrl = 'http://14.139.187.54:443/api/admin-login';
         }
 
-        const data = await response.json()
+        // 1. Call External API
+        let payload: any = { UserID: userId, Password: password };
+
+        if (userType === 'Supervisor') {
+            payload = {
+                UserId: userId,
+                password: password,
+                UserType: 'Supervisor'
+            };
+        }
+
+        const response = await fetch(apiUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        })
+
+        const responseText = await response.text();
+        let data;
+        try {
+            data = JSON.parse(responseText);
+        } catch (e) {
+            console.error('Failed to parse JSON response:', responseText);
+            return { error: `External API returned invalid response: ${responseText.substring(0, 100)}...` };
+        }
+
+        if (!response.ok) {
+            return { error: data.error || 'Invalid UserID or Password (External)' }
+        }
+
+        // If Supervisor, return token/data directly (no Supabase sync)
+        if (userType === 'Supervisor') {
+            // Sync with Supabase 'admins' table
+            const supabase = await createClient()
+            const adminData = data.admin
+
+            // 1. Upsert Admin Details
+            const { error: upsertError } = await supabase
+                .from('admins')
+                .upsert({
+                    user_id: adminData.UserId.trim(),
+                    dept_id: adminData.DeptId,
+                    user_type: adminData.UserType.trim(),
+                    dept_mail_id: adminData.Deptmailid,
+                    department_name: adminData.DepartmentName,
+                    dept_alias_name: adminData.Deptaliasname?.trim(),
+                    last_login: new Date().toISOString()
+                })
+
+            if (upsertError) {
+                console.error('Error syncing admin to Supabase:', upsertError)
+            }
+
+            // 2. Log Login Event
+            const { error: logError } = await supabase
+                .from('admin_logs')
+                .insert({
+                    user_id: adminData.UserId.trim(),
+                    action: 'LOGIN'
+                })
+
+            if (logError) {
+                console.error('Error logging admin login:', logError)
+            }
+
+            return { success: true, token: data.token, admin: data.admin, role: 'Supervisor' }
+        }
+
+        // --- Staff Logic (Supabase Sync) ---
         const user = data.user
 
         if (!user) {
@@ -71,7 +134,7 @@ export async function loginAction(prevState: any, formData: FormData) {
                 // SignUp successful and session created (email confirmation off)
                 // Update profile with extra details
                 await updateProfile(supabase, signUpData.user?.id, user)
-                return { success: true }
+                return { success: true, role: 'Staff' }
             } else if (signUpData.user && !signUpData.session) {
                 return { error: 'Account created in Supabase. Please confirm your email if required, or ask Admin to disable email confirmation.' }
             }
@@ -82,14 +145,31 @@ export async function loginAction(prevState: any, formData: FormData) {
             if (sbUser) {
                 await updateProfile(supabase, sbUser.id, user)
             }
-            return { success: true }
+            return { success: true, role: 'Staff' }
         }
 
-        return { success: true }
+        return { success: true, role: 'Staff' }
 
     } catch (err: any) {
         console.error('Login error:', err)
-        return { error: 'Internal server error' }
+        return { error: `Internal server error: ${err.message}` }
+    }
+}
+
+export async function logoutAction(userId: string) {
+    if (!userId) return
+
+    const supabase = await createClient()
+
+    try {
+        await supabase
+            .from('admin_logs')
+            .insert({
+                user_id: userId,
+                action: 'LOGOUT'
+            })
+    } catch (err) {
+        console.error('Error logging logout:', err)
     }
 }
 

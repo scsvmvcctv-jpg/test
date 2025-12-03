@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { useRouter } from 'next/navigation' // Import useRouter
 import { createClient } from '@/lib/supabase/client'
 import { DataTable } from '@/components/DataTable'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -41,9 +42,54 @@ export default function AdminPage() {
     const [detailsLoading, setDetailsLoading] = useState(false)
 
     const supabase = createClient()
+    const router = useRouter() // Add router
+
+    const [adminDetails, setAdminDetails] = useState<any>(null)
 
     useEffect(() => {
-        fetchData()
+        // Check for admin token
+        const token = localStorage.getItem('adminToken')
+        if (!token) {
+            router.push('/login')
+            return
+        }
+
+        // Fetch admin details and then data
+        const init = async () => {
+            const adminDataStr = localStorage.getItem('adminData')
+            if (adminDataStr) {
+                const localAdminData = JSON.parse(adminDataStr)
+                let currentAdminDetails = null
+
+                // 1. Get Admin Details
+                const { data, error } = await supabase
+                    .from('admins')
+                    .select('*')
+                    .eq('user_id', localAdminData.UserId.trim())
+                    .single()
+
+                if (data) {
+                    setAdminDetails(data)
+                    currentAdminDetails = data
+                } else {
+                    currentAdminDetails = {
+                        user_id: localAdminData.UserId,
+                        dept_mail_id: localAdminData.Deptmailid,
+                        department_name: localAdminData.DepartmentName
+                    }
+                    setAdminDetails(currentAdminDetails)
+                }
+
+                // 2. Fetch Data with Filter
+                if (currentAdminDetails?.department_name) {
+                    fetchData(currentAdminDetails.department_name)
+                } else {
+                    fetchData() // Fallback
+                }
+            }
+        }
+
+        init()
     }, [])
 
     useEffect(() => {
@@ -52,13 +98,23 @@ export default function AdminPage() {
         }
     }, [selectedStaff])
 
-    const fetchData = async () => {
+    const fetchData = async (departmentFilter?: string) => {
         setLoading(true)
 
-        const { data: profiles, error: profilesError } = await supabase
+        let query = supabase
             .from('profiles')
             .select('*')
             .order('full_name', { ascending: true })
+
+        // Apply Department Filter
+        if (departmentFilter) {
+            // Using ilike for case-insensitive matching. 
+            // We strip the trailing comma if present in the filter (e.g. "Computer Science and Engg.,")
+            const cleanFilter = departmentFilter.replace(/,$/, '').trim()
+            query = query.ilike('department_name', `%${cleanFilter}%`)
+        }
+
+        const { data: profiles, error: profilesError } = await query
 
         if (profilesError || !profiles) {
             console.error('Error fetching profiles:', profilesError)
@@ -75,13 +131,13 @@ export default function AdminPage() {
             { data: practicalAssessments },
             { data: workload }
         ] = await Promise.all([
-            supabase.from('lecture_plans').select('staff_id, actual_completion_date'),
-            supabase.from('tests').select('staff_id'),
-            supabase.from('assignments').select('staff_id'),
-            supabase.from('extra_classes').select('staff_id'),
-            supabase.from('assessment_theory').select('staff_id'),
-            supabase.from('assessment_practical').select('staff_id'),
-            supabase.from('workload_schedule').select('staff_id')
+            supabase.rpc('admin_get_lecture_plans'),
+            supabase.rpc('admin_get_tests'),
+            supabase.rpc('admin_get_assignments'),
+            supabase.rpc('admin_get_extra_classes'),
+            supabase.rpc('admin_get_assessment_theory'),
+            supabase.rpc('admin_get_assessment_practical'),
+            supabase.rpc('admin_get_workload')
         ])
 
         const summaryData: StaffSummary[] = profiles.map(profile => {
@@ -126,13 +182,13 @@ export default function AdminPage() {
             { data: practical },
             { data: workload }
         ] = await Promise.all([
-            supabase.from('lecture_plans').select('*').eq('staff_id', staffId).order('proposed_date', { ascending: true }),
-            supabase.from('tests').select('*').eq('staff_id', staffId).order('proposed_test_date', { ascending: true }),
-            supabase.from('assignments').select('*').eq('staff_id', staffId).order('proposed_date', { ascending: true }),
-            supabase.from('extra_classes').select('*').eq('staff_id', staffId).order('date', { ascending: true }),
-            supabase.from('assessment_theory').select('*').eq('staff_id', staffId),
-            supabase.from('assessment_practical').select('*').eq('staff_id', staffId),
-            supabase.from('workload_schedule').select('*').eq('staff_id', staffId)
+            supabase.rpc('admin_get_lecture_plans').eq('staff_id', staffId).order('proposed_date', { ascending: true }),
+            supabase.rpc('admin_get_tests').eq('staff_id', staffId).order('proposed_test_date', { ascending: true }),
+            supabase.rpc('admin_get_assignments').eq('staff_id', staffId).order('proposed_date', { ascending: true }),
+            supabase.rpc('admin_get_extra_classes').eq('staff_id', staffId).order('date', { ascending: true }),
+            supabase.rpc('admin_get_assessment_theory').eq('staff_id', staffId),
+            supabase.rpc('admin_get_assessment_practical').eq('staff_id', staffId),
+            supabase.rpc('admin_get_workload').eq('staff_id', staffId)
         ])
 
         setStaffDetails({
@@ -180,6 +236,7 @@ export default function AdminPage() {
 
     // Detailed Columns
     const lecturePlanColumns: ColumnDef<any>[] = [
+        { accessorKey: 'staff_name', header: 'Staff Name', cell: () => selectedStaff?.full_name },
         { accessorKey: 'subject', header: 'Subject' },
         { accessorKey: 'period_no', header: 'Period' },
         { accessorKey: 'proposed_date', header: 'Proposed Date', cell: ({ row }) => row.original.proposed_date ? format(new Date(row.original.proposed_date), 'dd/MM/yyyy') : '-' },
@@ -189,6 +246,7 @@ export default function AdminPage() {
     ]
 
     const testColumns: ColumnDef<any>[] = [
+        { accessorKey: 'staff_name', header: 'Staff Name', cell: () => selectedStaff?.full_name },
         { accessorKey: 'subject', header: 'Subject' },
         { accessorKey: 'proposed_test_date', header: 'Proposed Date', cell: ({ row }) => row.original.proposed_test_date ? format(new Date(row.original.proposed_test_date), 'dd/MM/yyyy') : '-' },
         { accessorKey: 'actual_date', header: 'Actual Date', cell: ({ row }) => row.original.actual_date ? format(new Date(row.original.actual_date), 'dd/MM/yyyy') : '-' },
@@ -197,6 +255,7 @@ export default function AdminPage() {
     ]
 
     const assignmentColumns: ColumnDef<any>[] = [
+        { accessorKey: 'staff_name', header: 'Staff Name', cell: () => selectedStaff?.full_name },
         { accessorKey: 'subject', header: 'Subject' },
         { accessorKey: 'type', header: 'Type' },
         { accessorKey: 'proposed_date', header: 'Proposed Date', cell: ({ row }) => row.original.proposed_date ? format(new Date(row.original.proposed_date), 'dd/MM/yyyy') : '-' },
@@ -206,6 +265,7 @@ export default function AdminPage() {
     ]
 
     const extraClassColumns: ColumnDef<any>[] = [
+        { accessorKey: 'staff_name', header: 'Staff Name', cell: () => selectedStaff?.full_name },
         { accessorKey: 'date', header: 'Date', cell: ({ row }) => row.original.date ? format(new Date(row.original.date), 'dd/MM/yyyy') : '-' },
         { accessorKey: 'period', header: 'Period' },
         { accessorKey: 'topic', header: 'Topic' },
@@ -213,6 +273,7 @@ export default function AdminPage() {
     ]
 
     const theoryColumns: ColumnDef<any>[] = [
+        { accessorKey: 'staff_name', header: 'Staff Name', cell: () => selectedStaff?.full_name },
         { accessorKey: 'student_id', header: 'Student ID' },
         { accessorKey: 'internal_1', header: 'Internal 1' },
         { accessorKey: 'internal_2', header: 'Internal 2' },
@@ -221,6 +282,7 @@ export default function AdminPage() {
     ]
 
     const practicalColumns: ColumnDef<any>[] = [
+        { accessorKey: 'staff_name', header: 'Staff Name', cell: () => selectedStaff?.full_name },
         { accessorKey: 'student_id', header: 'Student ID' },
         { accessorKey: 'observations', header: 'Observations' },
         { accessorKey: 'model_test', header: 'Model Test' },
@@ -229,6 +291,7 @@ export default function AdminPage() {
     ]
 
     const workloadColumns: ColumnDef<any>[] = [
+        { accessorKey: 'staff_name', header: 'Staff Name', cell: () => selectedStaff?.full_name },
         { accessorKey: 'day_of_week', header: 'Day' },
         { accessorKey: 'period_1', header: '1' },
         { accessorKey: 'period_2', header: '2' },
@@ -337,6 +400,22 @@ export default function AdminPage() {
 
     return (
         <div className="space-y-6">
+            {adminDetails && (
+                <Card className="bg-gradient-to-r from-blue-50 to-indigo-50 border-blue-100">
+                    <CardContent className="pt-6">
+                        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                            <div>
+                                <h2 className="text-2xl font-bold text-blue-900">Welcome, {adminDetails.user_id}</h2>
+                                <p className="text-blue-700">{adminDetails.department_name}</p>
+                            </div>
+                            <div className="flex items-center gap-2 text-sm text-blue-600 bg-white/50 px-3 py-1 rounded-full border border-blue-200">
+                                <span className="font-medium">Email:</span> {adminDetails.dept_mail_id}
+                            </div>
+                        </div>
+                    </CardContent>
+                </Card>
+            )}
+
             <div className="flex items-center justify-between">
                 <h1 className="text-4xl font-extrabold tracking-tight">Admin Dashboard</h1>
             </div>
