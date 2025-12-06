@@ -280,7 +280,7 @@ export default function WorkloadPage() {
                                     className="w-[60px] h-8"
                                 />
                             </div>
-                            <Button size="sm" onClick={fetchFacultyWorkload} disabled={loadingWorkload} className="h-8 mb-0.5">
+                            <Button size="sm" onClick={() => fetchFacultyWorkload()} disabled={loadingWorkload} className="h-8 mb-0.5">
                                 {loadingWorkload ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
                                 <span className="ml-2">Load</span>
                             </Button>
