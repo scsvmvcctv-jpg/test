@@ -135,8 +135,9 @@ export default function WorkloadPage() {
     }
 
     const fetchFacultyWorkload = async (specificEmpId?: string, specificDeptId?: string) => {
-        const eId = specificEmpId || empId
-        const dId = specificDeptId || deptId
+        // Ensure arguments are strings (handle case where event might still be passed incorrectly or to be safe)
+        const eId = (typeof specificEmpId === 'string' ? specificEmpId : empId);
+        const dId = (typeof specificDeptId === 'string' ? specificDeptId : deptId);
 
         if (!eId || !dId) {
             setLoadingWorkload(false)

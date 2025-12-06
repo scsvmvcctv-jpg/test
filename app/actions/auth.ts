@@ -89,10 +89,22 @@ export async function loginAction(prevState: any, formData: FormData) {
 
         // --- Staff Logic (Supabase Sync) ---
         const user = data.user
+        const token = data.token
 
         if (!user) {
             return { error: 'Login successful but no user data returned' }
         }
+
+        // Store external token in cookie immediately (accessible for API proxy)
+        const cookieStore = await cookies()
+        console.log("LOGIN SUCCESS: Setting external_token cookie...", token ? "Token exists" : "No token");
+        cookieStore.set('external_token', token, {
+            secure: process.env.NODE_ENV === 'production',
+            httpOnly: true,
+            sameSite: 'strict',
+            path: '/',
+            maxAge: 3600 // 1 hour
+        })
 
         // 2. Sync with Supabase
         const supabase = await createClient()

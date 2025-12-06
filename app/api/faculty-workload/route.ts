@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-// import jwt from 'jsonwebtoken';
+import { cookies } from 'next/headers';
 
 const API_BASE_URL = 'http://14.139.187.54:443';
 
@@ -9,8 +9,10 @@ export async function GET(req: Request) {
         const EmpId = searchParams.get('EmpId');
         const Dept = searchParams.get('Dept');
 
-        // Use logic similar to authentication middleware to generate token
-        const authHeader = req.headers.get('Authorization');
+        // Get the token we stored in cookies during login
+        const cookieStore = await cookies();
+        const externalToken = cookieStore.get('external_token');
+        console.log(`API PROXY: Checking for 'external_token' cookie... Found? ${externalToken ? 'YES' : 'NO'}`);
 
         if (!EmpId || !Dept) {
             return NextResponse.json({
@@ -18,24 +20,24 @@ export async function GET(req: Request) {
             }, { status: 400 });
         }
 
-        if (!authHeader) {
+        if (!externalToken || !externalToken.value) {
+            // Fallback: If cookie is missing, we might have been passed a token in Auth header?
+            // But we decided to trust the external auth.
+            // Let's try to see if the user has a valid Supabase session, maybe we can re-login silently? 
+            // No, password is not stored.
             return NextResponse.json({
-                error: "Authorization header missing"
+                error: "External session expired. Please log out and log in again."
             }, { status: 401 });
         }
 
-        // Use the token explicitly provided by the user which is known to be valid
-        // NOTE: This is a temporary fix for verification. Ideally, we should sign our own tokens if we had the correct SECRET.
-        const newNodeToken = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpYXQiOjE3NjQ5NjA3Mzg2MTAsImV4cCI6MTc2NDk2NDMzOCwiZGF0YSI6eyJFbXBJRCI6MTAwMjEsIkRlcGFydG1lbnRubyI6MSwiTmFtZSI6IkUuU0FOS0FSIiwiVXNlcklEIjoiZXNhbmthciJ9fQ.4r0d6214KWZvkCdDQf2gnfxcuJnudDiqLWBQ2qoqSHg";
-
-        // Forward request to external API with NEW token
+        // 4. Proxy Request
         const targetUrl = `${API_BASE_URL}/api/facultyworkload?EmpId=${EmpId}&Dept=${Dept}`;
 
         console.log(`Proxying request to: ${targetUrl}`);
 
         const response = await fetch(targetUrl, {
             headers: {
-                'Authorization': `Bearer ${newNodeToken}`,
+                'Authorization': `Bearer ${externalToken.value}`,
                 'Content-Type': 'application/json'
             }
         });
@@ -43,6 +45,13 @@ export async function GET(req: Request) {
         if (!response.ok) {
             const errorText = await response.text();
             console.error(`External API Error (${response.status}):`, errorText);
+
+            if (response.status === 401 || response.status === 403) {
+                return NextResponse.json({
+                    error: "External session expired. Please log out and log in again."
+                }, { status: 401 });
+            }
+
             return NextResponse.json({
                 error: `External API error: ${response.status}`,
                 details: errorText
