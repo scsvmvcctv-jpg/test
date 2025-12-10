@@ -13,7 +13,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Loader2, Plus, Pencil, Trash2, Upload, Download } from 'lucide-react'
+import { Loader2, Plus, Pencil, Trash2, Upload, Download, FileText, ExternalLink } from 'lucide-react'
 import { ColumnDef } from '@tanstack/react-table'
 import { format } from 'date-fns'
 import Papa from 'papaparse'
@@ -26,6 +26,13 @@ type Assignment = {
     actual_date: string
     date_returned: string
     remarks: string
+    file_url?: string
+}
+
+type SubjectItem = {
+    code: string
+    name: string
+    displayName: string
 }
 
 export default function AssignmentsPage() {
@@ -34,26 +41,92 @@ export default function AssignmentsPage() {
     const [editingItem, setEditingItem] = useState<Partial<Assignment> | null>(null)
     const [open, setOpen] = useState(false)
     const [importing, setImporting] = useState(false)
+    const [uploading, setUploading] = useState(false)
     const fileInputRef = useRef<HTMLInputElement>(null)
     const supabase = createClient()
 
+    // Subject Filter State
+    const [subjects, setSubjects] = useState<SubjectItem[]>([])
+    const [selectedSubject, setSelectedSubject] = useState<string>("")
+    const [loadingSubjects, setLoadingSubjects] = useState(false)
+
     useEffect(() => {
-        fetchData()
+        initializeData()
     }, [])
 
-    const fetchData = async () => {
+    const initializeData = async () => {
         setLoading(true)
+        setLoadingSubjects(true)
         const { data: { user } } = await supabase.auth.getUser()
         if (!user) return
 
+        // Fetch User Profile
+        const { data: profile } = await supabase
+            .from('profiles')
+            .select('emp_id, department_no')
+            .eq('id', user.id)
+            .single()
+
+        if (profile?.emp_id && profile?.department_no) {
+            await fetchSubjects(profile.emp_id, profile.department_no)
+        }
+
+        // Fetch Assignments
+        await fetchAssignments(user.id)
+
+        setLoading(false)
+        setLoadingSubjects(false)
+    }
+
+    const fetchSubjects = async (empId: string, deptId: string) => {
+        try {
+            const { data: { session } } = await supabase.auth.getSession();
+            const token = session?.access_token;
+
+            const res = await fetch(`/api/faculty-workload?EmpId=${empId}&Dept=${deptId}`, {
+                headers: {
+                    'Authorization': `Bearer ${token}`
+                }
+            })
+            const result = await res.json()
+
+            if (result.data && Array.isArray(result.data)) {
+                // Extract unique subjects
+                const uniqueSubjects = new Map<string, SubjectItem>();
+
+                result.data.forEach((item: any) => {
+                    if (item.SubjectCode && item.Subject_Name) {
+                        const key = `${item.SubjectCode}-${item.Subject_Name}`;
+                        if (!uniqueSubjects.has(key)) {
+                            uniqueSubjects.set(key, {
+                                code: item.SubjectCode,
+                                name: item.Subject_Name,
+                                displayName: `${item.SubjectCode} - ${item.Subject_Name}`
+                            });
+                        }
+                    }
+                });
+
+                setSubjects(Array.from(uniqueSubjects.values()));
+            }
+        } catch (error) {
+            console.error("Failed to fetch subjects", error)
+        }
+    }
+
+    const fetchAssignments = async (userId: string) => {
         const { data } = await supabase
             .from('assignments')
             .select('*')
-            .eq('staff_id', user.id)
+            .eq('staff_id', userId)
             .order('proposed_date', { ascending: true })
 
         if (data) setData(data)
-        setLoading(false)
+    }
+
+    const reloadData = async () => {
+        const { data: { user } } = await supabase.auth.getUser()
+        if (user) await fetchAssignments(user.id)
     }
 
     const handleSave = async (e: React.FormEvent) => {
@@ -77,7 +150,7 @@ export default function AssignmentsPage() {
 
         if (!error) {
             setOpen(false)
-            fetchData()
+            reloadData()
         } else {
             alert('Error saving data')
         }
@@ -86,10 +159,10 @@ export default function AssignmentsPage() {
     const handleDelete = async (id: string) => {
         if (!confirm('Are you sure?')) return
         const { error } = await supabase.from('assignments').delete().eq('id', id)
-        if (!error) fetchData()
+        if (!error) reloadData()
     }
 
-    const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const handleImportFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
         const file = event.target.files?.[0]
         if (!file) return
 
@@ -129,7 +202,7 @@ export default function AssignmentsPage() {
                         alert('Error importing data: ' + error.message)
                     } else {
                         alert(`Successfully imported ${validRows.length} records`)
-                        fetchData()
+                        reloadData()
                     }
                 } else {
                     alert('No valid records found in CSV')
@@ -142,6 +215,36 @@ export default function AssignmentsPage() {
                 setImporting(false)
             }
         })
+    }
+
+    const handleAssignmentFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0]
+        if (!file) return
+
+        setUploading(true)
+        try {
+            const fileExt = file.name.split('.').pop()
+            const fileName = `${Math.random().toString(36).substring(2)}.${fileExt}`
+            const filePath = `${fileName}`
+
+            const { error: uploadError } = await supabase.storage
+                .from('assignments')
+                .upload(filePath, file)
+
+            if (uploadError) {
+                throw uploadError
+            }
+
+            const { data: { publicUrl } } = supabase.storage
+                .from('assignments')
+                .getPublicUrl(filePath)
+
+            setEditingItem(prev => ({ ...prev, file_url: publicUrl }))
+        } catch (error: any) {
+            alert('Error uploading file: ' + error.message)
+        } finally {
+            setUploading(false)
+        }
     }
 
     const downloadSample = () => {
@@ -158,6 +261,15 @@ export default function AssignmentsPage() {
             document.body.removeChild(link)
         }
     }
+
+    // Filter Logic
+    const filteredData = selectedSubject
+        ? data.filter(item => {
+            const subjObj = subjects.find(s => s.displayName === selectedSubject);
+            if (!subjObj) return item.subject === selectedSubject;
+            return item.subject === subjObj.name || item.subject === subjObj.code || item.subject === selectedSubject;
+        })
+        : [];
 
     const columns: ColumnDef<Assignment>[] = [
         { accessorKey: 'subject', header: 'Subject' },
@@ -177,6 +289,16 @@ export default function AssignmentsPage() {
             header: 'Returned Date',
             cell: ({ row }) => row.original.date_returned ? format(new Date(row.original.date_returned), 'dd/MM/yyyy') : '-'
         },
+        {
+            id: 'file',
+            header: 'File',
+            cell: ({ row }) => row.original.file_url ? (
+                <a href={row.original.file_url} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:text-blue-800 flex items-center gap-1">
+                    <FileText className="w-4 h-4" />
+                    View
+                </a>
+            ) : '-'
+        },
         { accessorKey: 'remarks', header: 'Remarks' },
         {
             id: 'actions',
@@ -193,36 +315,71 @@ export default function AssignmentsPage() {
         }
     ]
 
+    const handleAddItem = () => {
+        const subjObj = subjects.find(s => s.displayName === selectedSubject);
+        setEditingItem({
+            subject: subjObj ? subjObj.name : '',
+            type: 'Assignment'
+        });
+        setOpen(true);
+    }
+
     if (loading) return <div className="flex justify-center p-8"><Loader2 className="animate-spin" /></div>
 
     return (
         <div className="space-y-6">
-            <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
-                <h1 className="text-3xl font-bold">Assignments / Lab Records</h1>
-                <div className="flex items-center gap-2">
-                    <input
-                        type="file"
-                        accept=".csv"
-                        className="hidden"
-                        ref={fileInputRef}
-                        onChange={handleFileUpload}
-                    />
-                    <Button variant="outline" onClick={downloadSample} title="Download Sample CSV">
-                        <Download className="w-4 h-4 mr-2" />
-                        Sample CSV
-                    </Button>
-                    <Button variant="outline" onClick={() => fileInputRef.current?.click()} disabled={importing}>
-                        {importing ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Upload className="w-4 h-4 mr-2" />}
-                        Import CSV
-                    </Button>
-                    <Button onClick={() => { setEditingItem({ type: 'Assignment' }); setOpen(true); }}>
-                        <Plus className="w-4 h-4 mr-2" />
-                        Add Entry
-                    </Button>
+            <div className="flex flex-col gap-4">
+                <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
+                    <h1 className="text-3xl font-bold">Assignments / Lab Records</h1>
+                    <div className="flex items-center gap-2">
+                        <input
+                            type="file"
+                            accept=".csv"
+                            className="hidden"
+                            ref={fileInputRef}
+                            onChange={handleImportFileUpload}
+                        />
+                        <Button variant="outline" onClick={downloadSample} title="Download Sample CSV">
+                            <Download className="w-4 h-4 mr-2" />
+                            Sample CSV
+                        </Button>
+                        <Button variant="outline" onClick={() => fileInputRef.current?.click()} disabled={importing}>
+                            {importing ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Upload className="w-4 h-4 mr-2" />}
+                            Import CSV
+                        </Button>
+                        <Button onClick={handleAddItem} disabled={!selectedSubject}>
+                            <Plus className="w-4 h-4 mr-2" />
+                            Add Entry
+                        </Button>
+                    </div>
+                </div>
+
+                <div className="flex items-center gap-4 bg-muted/30 p-4 rounded-lg">
+                    <div className="grid gap-2 w-full max-w-md">
+                        <Label>Select Subject</Label>
+                        <Select value={selectedSubject} onValueChange={setSelectedSubject} disabled={loadingSubjects}>
+                            <SelectTrigger className="bg-background">
+                                <SelectValue placeholder={loadingSubjects ? "Loading subjects..." : "Select a subject to view assignments..."} />
+                            </SelectTrigger>
+                            <SelectContent>
+                                {subjects.map((subj) => (
+                                    <SelectItem key={subj.displayName} value={subj.displayName}>
+                                        {subj.displayName}
+                                    </SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
+                    </div>
                 </div>
             </div>
 
-            <DataTable columns={columns} data={data} />
+            {selectedSubject ? (
+                <DataTable columns={columns} data={filteredData} />
+            ) : (
+                <div className="flex flex-col items-center justify-center p-12 border rounded-lg border-dashed text-muted-foreground bg-muted/10">
+                    <p className="text-lg font-medium">Please select a subject to view its assignments</p>
+                </div>
+            )}
 
             <Dialog open={open} onOpenChange={setOpen}>
                 <DialogContent>
@@ -233,6 +390,11 @@ export default function AssignmentsPage() {
                         <div className="grid gap-2">
                             <Label htmlFor="subject">Subject</Label>
                             <Input id="subject" value={editingItem?.subject || ''} onChange={e => setEditingItem({ ...editingItem, subject: e.target.value })} required />
+                            {selectedSubject && (
+                                <p className="text-xs text-muted-foreground">
+                                    Current filter: {selectedSubject}
+                                </p>
+                            )}
                         </div>
                         <div className="grid gap-2">
                             <Label htmlFor="type">Type</Label>
@@ -264,11 +426,32 @@ export default function AssignmentsPage() {
                             </div>
                         </div>
                         <div className="grid gap-2">
+                            <Label htmlFor="file">Attachment</Label>
+                            <div className="flex items-center gap-2">
+                                <Input
+                                    id="file"
+                                    type="file"
+                                    onChange={handleAssignmentFileUpload}
+                                    disabled={uploading}
+                                    className="cursor-pointer"
+                                />
+                                {uploading && <Loader2 className="w-4 h-4 animate-spin" />}
+                            </div>
+                            {editingItem?.file_url && (
+                                <div className="text-sm text-green-600 flex items-center gap-1 mt-1">
+                                    <ExternalLink className="w-3 h-3" />
+                                    <a href={editingItem.file_url} target="_blank" rel="noopener noreferrer" className="hover:underline">
+                                        File Attached
+                                    </a>
+                                </div>
+                            )}
+                        </div>
+                        <div className="grid gap-2">
                             <Label htmlFor="remarks">Remarks</Label>
                             <Input id="remarks" value={editingItem?.remarks || ''} onChange={e => setEditingItem({ ...editingItem, remarks: e.target.value })} />
                         </div>
                         <div className="flex justify-end">
-                            <Button type="submit">Save</Button>
+                            <Button type="submit" disabled={uploading}>Save</Button>
                         </div>
                     </form>
                 </DialogContent>

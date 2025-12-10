@@ -9,13 +9,17 @@ import {
     DialogContent,
     DialogHeader,
     DialogTitle,
+    DialogDescription,
+    DialogFooter,
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Loader2, Plus, Pencil, Trash2 } from 'lucide-react'
+import { Loader2, Plus, Pencil, Trash2, Send, AlertCircle } from 'lucide-react'
 import { ColumnDef } from '@tanstack/react-table'
 import { format } from 'date-fns'
 import { SignatureUploader } from '@/components/SignatureUploader'
+import { Badge } from '@/components/ui/badge'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 
 type Inspection = {
     id: string
@@ -25,6 +29,8 @@ type Inspection = {
     remarks: string
     hod_initial_url: string
     dean_initial_url: string
+    status: string
+    admin_comments?: string
 }
 
 export default function InspectionsPage() {
@@ -32,6 +38,8 @@ export default function InspectionsPage() {
     const [loading, setLoading] = useState(true)
     const [editingItem, setEditingItem] = useState<Partial<Inspection> | null>(null)
     const [open, setOpen] = useState(false)
+    const [submitResult, setSubmitResult] = useState<{ id: string, name: string } | null>(null)
+    const [confirmSubmitOpen, setConfirmSubmitOpen] = useState(false)
     const supabase = createClient()
 
     useEffect(() => {
@@ -61,6 +69,7 @@ export default function InspectionsPage() {
         const item = {
             ...editingItem,
             staff_id: user.id,
+            status: editingItem.status === 'Returned' ? 'Pending' : (editingItem.status || 'Pending'),
         }
 
         let error
@@ -86,6 +95,38 @@ export default function InspectionsPage() {
         if (!error) fetchData()
     }
 
+    const handleSubmitToHod = async () => {
+        if (!submitResult) return
+
+        const { error } = await supabase
+            .from('inspections')
+            .update({ status: 'Submitted' })
+            .eq('id', submitResult.id)
+
+        if (!error) {
+            fetchData()
+            setConfirmSubmitOpen(false)
+            setSubmitResult(null)
+        } else {
+            alert('Error submitting to HOD')
+        }
+    }
+
+    const getStatusBadge = (status: string) => {
+        switch (status) {
+            case 'Submitted':
+                return <Badge variant="secondary" className="bg-yellow-100 text-yellow-800 hover:bg-yellow-100">Submitted</Badge>
+            case 'HOD Approved':
+                return <Badge variant="secondary" className="bg-blue-100 text-blue-800 hover:bg-blue-100">HOD Approved</Badge>
+            case 'Dean Approved':
+                return <Badge variant="secondary" className="bg-green-100 text-green-800 hover:bg-green-100">Dean Approved</Badge>
+            case 'Returned':
+                return <Badge variant="destructive" className="bg-red-100 text-red-800 hover:bg-red-100">Returned</Badge>
+            default:
+                return <Badge variant="outline">Pending</Badge>
+        }
+    }
+
     const columns: ColumnDef<Inspection>[] = [
         {
             accessorKey: 'date',
@@ -95,6 +136,21 @@ export default function InspectionsPage() {
         { accessorKey: 'deviations', header: 'Deviations' },
         { accessorKey: 'corrective_action', header: 'Corrective Action' },
         { accessorKey: 'remarks', header: 'Remarks' },
+        {
+            accessorKey: 'status',
+            header: 'Status',
+            cell: ({ row }) => getStatusBadge(row.original.status || 'Pending')
+        },
+        {
+            id: 'comments',
+            header: 'Admin Query',
+            cell: ({ row }) => row.original.status === 'Returned' && row.original.admin_comments ? (
+                <div className="flex items-center text-red-600 font-medium text-sm max-w-[200px]">
+                    <AlertCircle className="w-4 h-4 mr-1 shrink-0" />
+                    <span className="truncate" title={row.original.admin_comments}>{row.original.admin_comments}</span>
+                </div>
+            ) : '-'
+        },
         {
             accessorKey: 'hod_initial_url',
             header: 'HOD Initial',
@@ -107,16 +163,40 @@ export default function InspectionsPage() {
         },
         {
             id: 'actions',
-            cell: ({ row }) => (
-                <div className="flex justify-end gap-2">
-                    <Button variant="ghost" size="icon" onClick={() => { setEditingItem(row.original); setOpen(true); }}>
-                        <Pencil className="w-4 h-4" />
-                    </Button>
-                    <Button variant="ghost" size="icon" className="text-red-500" onClick={() => handleDelete(row.original.id)}>
-                        <Trash2 className="w-4 h-4" />
-                    </Button>
-                </div>
-            )
+            cell: ({ row }) => {
+                const isPending = !row.original.status || row.original.status === 'Pending' || row.original.status === 'Returned'
+                return (
+                    <div className="flex justify-end gap-2">
+                        {isPending && (
+                            <>
+                                <Button
+                                    variant="outline"
+                                    size="sm"
+                                    className="h-8 gap-1 text-blue-600 border-blue-200 hover:bg-blue-50"
+                                    onClick={() => {
+                                        setSubmitResult({ id: row.original.id, name: format(new Date(row.original.date), 'dd/MM/yyyy') })
+                                        setConfirmSubmitOpen(true)
+                                    }}
+                                >
+                                    <Send className="w-3 h-3" />
+                                    Submit
+                                </Button>
+                                <Button variant="ghost" size="icon" onClick={() => { setEditingItem(row.original); setOpen(true); }}>
+                                    <Pencil className="w-4 h-4" />
+                                </Button>
+                                <Button variant="ghost" size="icon" className="text-red-500" onClick={() => handleDelete(row.original.id)}>
+                                    <Trash2 className="w-4 h-4" />
+                                </Button>
+                            </>
+                        )}
+                        {!isPending && (
+                            <span className="text-xs text-muted-foreground italic flex items-center h-8 px-2">
+                                Locked
+                            </span>
+                        )}
+                    </div>
+                )
+            }
         }
     ]
 
@@ -139,6 +219,13 @@ export default function InspectionsPage() {
                     <DialogHeader>
                         <DialogTitle>{editingItem?.id ? 'Edit' : 'Add'} Inspection</DialogTitle>
                     </DialogHeader>
+                    {editingItem?.status === 'Returned' && editingItem.admin_comments && (
+                        <Alert variant="destructive" className="mb-4">
+                            <AlertCircle className="h-4 w-4" />
+                            <AlertTitle>Action Required</AlertTitle>
+                            <AlertDescription>{editingItem.admin_comments}</AlertDescription>
+                        </Alert>
+                    )}
                     <form onSubmit={handleSave} className="grid gap-4 py-4">
                         <div className="grid gap-2">
                             <Label htmlFor="date">Date</Label>
@@ -160,16 +247,36 @@ export default function InspectionsPage() {
                             <SignatureUploader
                                 label="HOD Initial"
                                 onUpload={(url) => setEditingItem({ ...editingItem, hod_initial_url: url })}
+                                initialUrl={editingItem?.hod_initial_url}
+
                             />
                             <SignatureUploader
                                 label="Dean Initial"
                                 onUpload={(url) => setEditingItem({ ...editingItem, dean_initial_url: url })}
+                                initialUrl={editingItem?.dean_initial_url}
                             />
                         </div>
                         <div className="flex justify-end">
                             <Button type="submit">Save</Button>
                         </div>
                     </form>
+                </DialogContent>
+            </Dialog>
+
+            <Dialog open={confirmSubmitOpen} onOpenChange={setConfirmSubmitOpen}>
+                <DialogContent>
+                    <DialogHeader>
+                        <DialogTitle>Confirm Submission</DialogTitle>
+                        <DialogDescription>
+                            Are you sure you want to submit the inspection for <strong>{submitResult?.name}</strong> to the HOD?
+                            <br /><br />
+                            <span className="text-red-500 font-medium">Warning: This action cannot be undone. You will not be able to edit or delete this entry after submission.</span>
+                        </DialogDescription>
+                    </DialogHeader>
+                    <DialogFooter>
+                        <Button variant="outline" onClick={() => setConfirmSubmitOpen(false)}>Cancel</Button>
+                        <Button onClick={handleSubmitToHod}>Confirm Submit</Button>
+                    </DialogFooter>
                 </DialogContent>
             </Dialog>
         </div>
