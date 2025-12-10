@@ -10,9 +10,10 @@ import { Loader2, Upload } from 'lucide-react'
 interface SignatureUploaderProps {
     onUpload: (url: string) => void
     label: string
+    initialUrl?: string
 }
 
-export function SignatureUploader({ onUpload, label }: SignatureUploaderProps) {
+export function SignatureUploader({ onUpload, label, initialUrl }: SignatureUploaderProps) {
     const [uploading, setUploading] = useState(false)
     const supabase = createClient()
 
@@ -49,9 +50,16 @@ export function SignatureUploader({ onUpload, label }: SignatureUploaderProps) {
     return (
         <div className="grid w-full max-w-sm items-center gap-1.5">
             <Label htmlFor="signature">{label}</Label>
-            <div className="flex items-center gap-2">
-                <Input id="signature" type="file" onChange={handleUpload} disabled={uploading} />
-                {uploading && <Loader2 className="h-4 w-4 animate-spin" />}
+            <div className="flex flex-col gap-2">
+                <div className="flex items-center gap-2">
+                    <Input id="signature" type="file" onChange={handleUpload} disabled={uploading} />
+                    {uploading && <Loader2 className="h-4 w-4 animate-spin" />}
+                </div>
+                {initialUrl && (
+                    <div className="mt-2">
+                        <img src={initialUrl} alt="Signature Preview" className="h-16 object-contain border rounded p-1" />
+                    </div>
+                )}
             </div>
         </div>
     )
