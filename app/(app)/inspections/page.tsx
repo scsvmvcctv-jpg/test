@@ -69,7 +69,7 @@ export default function InspectionsPage() {
         const item = {
             ...editingItem,
             staff_id: user.id,
-            status: editingItem.status === 'Returned' ? 'Pending' : (editingItem.status || 'Pending'),
+            status: (editingItem?.status === 'Returned') ? 'Pending' : (editingItem?.status || 'Pending'),
         }
 
         let error
