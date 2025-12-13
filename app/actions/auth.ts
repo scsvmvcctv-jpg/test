@@ -18,6 +18,7 @@ export async function loginAction(prevState: any, formData: FormData) {
             // Use local API for Supervisor to ensure updated logic is used
             apiUrl = 'http://14.139.187.54:443/api/admin-login';
         }
+        console.log('Using API URL:', apiUrl);
 
         // 1. Call External API
         let payload: any = { UserID: userId, Password: password };
@@ -35,6 +36,7 @@ export async function loginAction(prevState: any, formData: FormData) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload),
         })
+        console.log('External API Status:', response.status);
 
         const responseText = await response.text();
         let data;
@@ -46,6 +48,7 @@ export async function loginAction(prevState: any, formData: FormData) {
         }
 
         if (!response.ok) {
+            console.error('External API failed with error:', data.error);
             return { error: data.error || 'Invalid UserID or Password (External)' }
         }
 
@@ -115,6 +118,8 @@ export async function loginAction(prevState: any, formData: FormData) {
             email,
             password,
         })
+
+        console.log('Supabase signIn result:', { error: signInError ? signInError.message : 'Success' });
 
         if (signInError) {
             // If sign in fails, try to sign up (auto-register)

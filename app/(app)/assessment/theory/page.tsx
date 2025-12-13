@@ -1,364 +1,279 @@
 'use client'
 
-import { useEffect, useState, useRef } from 'react'
-import { createClient } from '@/lib/supabase/client'
-import { DataTable } from '@/components/DataTable'
-import { Button } from '@/components/ui/button'
-import {
-    Dialog,
-    DialogContent,
-    DialogHeader,
-    DialogTitle,
-} from '@/components/ui/dialog'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
+import { useState, useEffect } from 'react'
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Loader2, Plus, Pencil, Trash2, Upload, Download } from 'lucide-react'
-import { ColumnDef } from '@tanstack/react-table'
-import Papa from 'papaparse'
+import { Button } from '@/components/ui/button'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { AlertCircle, Loader2, Search } from 'lucide-react'
+import { fetchFilterOptions, fetchStudentData } from '@/app/actions/assessment'
 
-type TheoryAssessment = {
-    id: string
-    subject: string
-    student_id: string
-    internal_1: number
-    internal_2: number
-    assignment_attendance: number
-    total: number
-}
+export default function AssessmentTheoryPage() {
+    // Filter State
+    const [filterOptions, setFilterOptions] = useState<any>(null)
+    const [loadingFilters, setLoadingFilters] = useState(true)
+    const [filterError, setFilterError] = useState<string | null>(null)
 
-type SubjectItem = {
-    code: string
-    name: string
-    displayName: string
-}
+    // Selection State
+    const [selectedYear, setSelectedYear] = useState('')
+    const [selectedCourse, setSelectedCourse] = useState('')
+    const [selectedSemester, setSelectedSemester] = useState('')
+    const [selectedMode, setSelectedMode] = useState('')
+    const [selectedSection, setSelectedSection] = useState('ALL')
 
-export default function TheoryAssessmentPage() {
-    const [data, setData] = useState<TheoryAssessment[]>([])
-    const [loading, setLoading] = useState(true)
-    const [editingItem, setEditingItem] = useState<Partial<TheoryAssessment> | null>(null)
-    const [open, setOpen] = useState(false)
-    const [importing, setImporting] = useState(false)
-    const fileInputRef = useRef<HTMLInputElement>(null)
-    const supabase = createClient()
+    // Data State
+    const [students, setStudents] = useState<any[]>([])
+    const [loadingStudents, setLoadingStudents] = useState(false)
+    const [studentError, setStudentError] = useState<string | null>(null)
+    const [hasSearched, setHasSearched] = useState(false)
 
-    // Subject Filter State
-    const [subjects, setSubjects] = useState<SubjectItem[]>([])
-    const [selectedSubject, setSelectedSubject] = useState<string>("")
-    const [loadingSubjects, setLoadingSubjects] = useState(false)
-
+    // Initial Load - Fetch Filter Options
     useEffect(() => {
-        initializeData()
+        async function loadFilters() {
+            setLoadingFilters(true)
+            const result = await fetchFilterOptions()
+            if (result.success) {
+                setFilterOptions(result.data)
+                // Auto-select defaults if available? For now, let user select.
+            } else {
+                setFilterError(result.error)
+            }
+            setLoadingFilters(false)
+        }
+        loadFilters()
     }, [])
 
-    const initializeData = async () => {
-        setLoading(true)
-        setLoadingSubjects(true)
-        const { data: { user } } = await supabase.auth.getUser()
-        if (!user) return
-
-        // Fetch User Profile
-        const { data: profile } = await supabase
-            .from('profiles')
-            .select('emp_id, department_no')
-            .eq('id', user.id)
-            .single()
-
-        if (profile?.emp_id && profile?.department_no) {
-            await fetchSubjects(profile.emp_id, profile.department_no)
+    const handleSearch = async () => {
+        if (!selectedYear || !selectedCourse || !selectedSemester) {
+            setStudentError('Please select Academic Year, Course, and Semester.')
+            return
         }
 
-        // Fetch Assessment Theory
-        await fetchAssessments(user.id)
+        setLoadingStudents(true)
+        setStudentError(null)
+        setHasSearched(true)
+        setStudents([])
+        setSelectedSection('ALL')
 
-        setLoading(false)
-        setLoadingSubjects(false)
-    }
-
-    const fetchSubjects = async (empId: string, deptId: string) => {
-        try {
-            const { data: { session } } = await supabase.auth.getSession();
-            const token = session?.access_token;
-
-            const res = await fetch(`/api/faculty-workload?EmpId=${empId}&Dept=${deptId}`, {
-                headers: {
-                    'Authorization': `Bearer ${token}`
-                }
-            })
-            const result = await res.json()
-
-            if (result.data && Array.isArray(result.data)) {
-                // Extract unique subjects
-                const uniqueSubjects = new Map<string, SubjectItem>();
-
-                result.data.forEach((item: any) => {
-                    if (item.SubjectCode && item.Subject_Name) {
-                        const key = `${item.SubjectCode}-${item.Subject_Name}`;
-                        if (!uniqueSubjects.has(key)) {
-                            uniqueSubjects.set(key, {
-                                code: item.SubjectCode,
-                                name: item.Subject_Name,
-                                displayName: `${item.SubjectCode} - ${item.Subject_Name}`
-                            });
-                        }
-                    }
-                });
-
-                setSubjects(Array.from(uniqueSubjects.values()));
-            }
-        } catch (error) {
-            console.error("Failed to fetch subjects", error)
-        }
-    }
-
-    const fetchAssessments = async (userId: string) => {
-        const { data } = await supabase
-            .from('assessment_theory')
-            .select('*')
-            .eq('staff_id', userId)
-            .order('student_id', { ascending: true })
-
-        if (data) setData(data)
-    }
-
-    const reloadData = async () => {
-        const { data: { user } } = await supabase.auth.getUser()
-        if (user) await fetchAssessments(user.id)
-    }
-
-    const handleSave = async (e: React.FormEvent) => {
-        e.preventDefault()
-        const { data: { user } } = await supabase.auth.getUser()
-        if (!user) return
-
-        const item = {
-            ...editingItem,
-            staff_id: user.id,
-        }
-
-        let error
-        if (item.id) {
-            const { error: updateError } = await supabase.from('assessment_theory').update(item).eq('id', item.id)
-            error = updateError
-        } else {
-            const { error: insertError } = await supabase.from('assessment_theory').insert(item)
-            error = insertError
-        }
-
-        if (!error) {
-            setOpen(false)
-            reloadData()
-        } else {
-            alert('Error saving data')
-        }
-    }
-
-    const handleDelete = async (id: string) => {
-        if (!confirm('Are you sure?')) return
-        const { error } = await supabase.from('assessment_theory').delete().eq('id', id)
-        if (!error) reloadData()
-    }
-
-    const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
-        const file = event.target.files?.[0]
-        if (!file) return
-
-        setImporting(true)
-        Papa.parse(file, {
-            header: true,
-            skipEmptyLines: true,
-            complete: async (results) => {
-                const { data: { user } } = await supabase.auth.getUser()
-                if (!user) {
-                    setImporting(false)
-                    return
-                }
-
-                const rows = results.data as any[]
-                const validRows = rows.map(row => {
-                    return {
-                        staff_id: user.id,
-                        subject: row.subject || row.Subject,
-                        student_id: row.student_id || row.StudentId || row.RegisterNo,
-                        internal_1: parseFloat(row.internal_1 || row.Internal1 || '0'),
-                        internal_2: parseFloat(row.internal_2 || row.Internal2 || '0'),
-                        assignment_attendance: parseFloat(row.assignment_attendance || row.AssignmentAttendance || '0')
-                    }
-                }).filter(row => row.subject && row.student_id)
-
-                if (validRows.length > 0) {
-                    const { error } = await supabase.from('assessment_theory').insert(validRows)
-                    if (error) {
-                        alert('Error importing data: ' + error.message)
-                    } else {
-                        alert(`Successfully imported ${validRows.length} records`)
-                        reloadData()
-                    }
-                } else {
-                    alert('No valid records found in CSV')
-                }
-                setImporting(false)
-                if (fileInputRef.current) fileInputRef.current.value = ''
-            },
-            error: (error) => {
-                alert('Error parsing CSV: ' + error.message)
-                setImporting(false)
-            }
+        const result = await fetchStudentData({
+            academicYear: selectedYear,
+            course: selectedCourse,
+            semester: selectedSemester
         })
-    }
 
-    const downloadSample = () => {
-        const csvContent = "Subject,StudentId,Internal1,Internal2,AssignmentAttendance\nMathematics,11199A001,12,13,9\nMathematics,11199A002,14,11,8"
-        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
-        const link = document.createElement('a')
-        if (link.download !== undefined) {
-            const url = URL.createObjectURL(blob)
-            link.setAttribute('href', url)
-            link.setAttribute('download', 'theory_assessment_sample.csv')
-            link.style.visibility = 'hidden'
-            document.body.appendChild(link)
-            link.click()
-            document.body.removeChild(link)
+        if (result.success) {
+            if (Array.isArray(result.data)) {
+                setStudents(result.data)
+            } else {
+                setStudentError('Received invalid data format from server.')
+                console.error('Expected array, got:', result.data)
+            }
+        } else {
+            setStudentError(result.error)
         }
+        setLoadingStudents(false)
     }
-
-    // Filter Logic
-    const filteredData = selectedSubject
-        ? data.filter(item => {
-            const subjObj = subjects.find(s => s.displayName === selectedSubject);
-            if (!subjObj) return item.subject === selectedSubject;
-            return item.subject === subjObj.name || item.subject === subjObj.code || item.subject === selectedSubject;
-        })
-        : [];
-
-    const columns: ColumnDef<TheoryAssessment>[] = [
-        { accessorKey: 'student_id', header: 'Student ID' },
-        { accessorKey: 'internal_1', header: 'Internal I (15)' },
-        { accessorKey: 'internal_2', header: 'Internal II (15)' },
-        { accessorKey: 'assignment_attendance', header: 'Assign/Att (10)' },
-        { accessorKey: 'total', header: 'Total (40)' },
-        {
-            id: 'actions',
-            cell: ({ row }) => (
-                <div className="flex justify-end gap-2">
-                    <Button variant="ghost" size="icon" onClick={() => { setEditingItem(row.original); setOpen(true); }}>
-                        <Pencil className="w-4 h-4" />
-                    </Button>
-                    <Button variant="ghost" size="icon" className="text-red-500" onClick={() => handleDelete(row.original.id)}>
-                        <Trash2 className="w-4 h-4" />
-                    </Button>
-                </div>
-            )
-        }
-    ]
-
-    const handleAddItem = () => {
-        const subjObj = subjects.find(s => s.displayName === selectedSubject);
-        setEditingItem({
-            subject: subjObj ? subjObj.name : '',
-            internal_1: 0,
-            internal_2: 0,
-            assignment_attendance: 0
-        });
-        setOpen(true);
-    }
-
-    if (loading) return <div className="flex justify-center p-8"><Loader2 className="animate-spin" /></div>
 
     return (
-        <div className="space-y-6">
-            <div className="flex flex-col gap-4">
-                <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
-                    <h1 className="text-3xl font-bold">Theory Assessment</h1>
-                    <div className="flex items-center gap-2">
-                        <input
-                            type="file"
-                            accept=".csv"
-                            className="hidden"
-                            ref={fileInputRef}
-                            onChange={handleFileUpload}
-                        />
-                        <Button variant="outline" onClick={downloadSample} title="Download Sample CSV">
-                            <Download className="w-4 h-4 mr-2" />
-                            Sample CSV
-                        </Button>
-                        <Button variant="outline" onClick={() => fileInputRef.current?.click()} disabled={importing}>
-                            {importing ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Upload className="w-4 h-4 mr-2" />}
-                            Import CSV
-                        </Button>
-                        <Button onClick={handleAddItem} disabled={!selectedSubject}>
-                            <Plus className="w-4 h-4 mr-2" />
-                            Add Entry
-                        </Button>
-                    </div>
-                </div>
-
-                <div className="flex items-center gap-4 bg-muted/30 p-4 rounded-lg">
-                    <div className="grid gap-2 w-full max-w-md">
-                        <Label>Select Subject</Label>
-                        <Select value={selectedSubject} onValueChange={setSelectedSubject} disabled={loadingSubjects}>
-                            <SelectTrigger className="bg-background">
-                                <SelectValue placeholder={loadingSubjects ? "Loading subjects..." : "Select a subject to view assessment..."} />
-                            </SelectTrigger>
-                            <SelectContent>
-                                {subjects.map((subj) => (
-                                    <SelectItem key={subj.displayName} value={subj.displayName}>
-                                        {subj.displayName}
-                                    </SelectItem>
-                                ))}
-                            </SelectContent>
-                        </Select>
-                    </div>
-                </div>
+        <div className="container mx-auto py-8 space-y-8">
+            <div className="flex flex-col gap-2">
+                <h1 className="text-3xl font-bold tracking-tight text-gray-900">Assessment Theory</h1>
+                <p className="text-gray-500">Manage student assessments and theory marks.</p>
             </div>
 
-            {selectedSubject ? (
-                <DataTable columns={columns} data={filteredData} />
-            ) : (
-                <div className="flex flex-col items-center justify-center p-12 border rounded-lg border-dashed text-muted-foreground bg-muted/10">
-                    <p className="text-lg font-medium">Please select a subject to view assessment details</p>
-                </div>
-            )}
+            {/* Filters Card */}
+            <Card className="border-t-4 border-t-indigo-500 shadow-md">
+                <CardHeader>
+                    <CardTitle className="text-lg flex items-center gap-2">
+                        <Search className="w-5 h-5 text-indigo-500" />
+                        Filter Students
+                    </CardTitle>
+                    <CardDescription>Select criteria to fetch student list.</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                    {filterError && (
+                        <div className="p-3 text-sm text-red-600 bg-red-50 border border-red-100 rounded-md flex items-center gap-2">
+                            <AlertCircle className="w-4 h-4" />
+                            Failed to load filters: {filterError}
+                        </div>
+                    )}
 
-            <Dialog open={open} onOpenChange={setOpen}>
-                <DialogContent>
-                    <DialogHeader>
-                        <DialogTitle>{editingItem?.id ? 'Edit' : 'Add'} Assessment</DialogTitle>
-                    </DialogHeader>
-                    <form onSubmit={handleSave} className="grid gap-4 py-4">
-                        <div className="grid gap-2">
-                            <Label htmlFor="subject">Subject</Label>
-                            <Input id="subject" value={editingItem?.subject || ''} onChange={e => setEditingItem({ ...editingItem, subject: e.target.value })} required />
-                            {selectedSubject && (
-                                <p className="text-xs text-muted-foreground">
-                                    Current filter: {selectedSubject}
-                                </p>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                        {/* Academic Year */}
+                        <div className="space-y-2">
+                            <label className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
+                                Academic Year
+                            </label>
+                            <Select value={selectedYear} onValueChange={setSelectedYear} disabled={loadingFilters}>
+                                <SelectTrigger>
+                                    <SelectValue placeholder="Select Year" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    {filterOptions?.academicYears?.map((year: any, idx: number) => (
+                                        <SelectItem key={idx} value={year.AcademicYear || year}>
+                                            {year.AcademicYear || year}
+                                        </SelectItem>
+                                    ))}
+                                    {/* Fallback if map fails or empty */}
+                                    {!filterOptions?.academicYears && <SelectItem value="2024-2025">2024-2025 (Fallback)</SelectItem>}
+                                </SelectContent>
+                            </Select>
+                        </div>
+
+                        {/* Course */}
+                        <div className="space-y-2">
+                            <label className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
+                                Course
+                            </label>
+                            <Select value={selectedCourse} onValueChange={setSelectedCourse} disabled={loadingFilters}>
+                                <SelectTrigger>
+                                    <SelectValue placeholder="Select Course" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    {filterOptions?.courses?.map((course: any, idx: number) => (
+                                        <SelectItem key={idx} value={course.CourseName || course}>
+                                            {course.CourseName || course}
+                                        </SelectItem>
+                                    ))}
+                                    {!filterOptions?.courses && <SelectItem value="BE [CSE]">BE [CSE] (Fallback)</SelectItem>}
+                                </SelectContent>
+                            </Select>
+                        </div>
+
+                        {/* Semester */}
+                        <div className="space-y-2">
+                            <label className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
+                                Semester
+                            </label>
+                            <Select value={selectedSemester} onValueChange={setSelectedSemester} disabled={loadingFilters}>
+                                <SelectTrigger>
+                                    <SelectValue placeholder="Select Sem" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    {[1, 2, 3, 4, 5, 6, 7, 8].map((sem) => (
+                                        <SelectItem key={sem} value={sem.toString()}>
+                                            Sem {sem}
+                                        </SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                        </div>
+
+                        {/* Mode */}
+                        <div className="space-y-2">
+                            <label className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
+                                Mode
+                            </label>
+                            <Select value={selectedMode} onValueChange={setSelectedMode} disabled={loadingFilters}>
+                                <SelectTrigger>
+                                    <SelectValue placeholder="Select Mode" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    {filterOptions?.modes?.map((mode: any, idx: number) => (
+                                        <SelectItem key={idx} value={mode.ModeName || mode}>
+                                            {mode.ModeName || mode}
+                                        </SelectItem>
+                                    ))}
+                                    {!filterOptions?.modes && <SelectItem value="Regular">Regular (Fallback)</SelectItem>}
+                                </SelectContent>
+                            </Select>
+                        </div>
+                    </div>
+
+                    <div className="flex justify-end pt-2">
+                        <Button
+                            onClick={handleSearch}
+                            disabled={loadingStudents || loadingFilters}
+                            className="bg-indigo-600 hover:bg-indigo-700 w-full md:w-auto"
+                        >
+                            {loadingStudents ? (
+                                <>
+                                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                    Fetching Data...
+                                </>
+                            ) : (
+                                'Get Student Details'
+                            )}
+                        </Button>
+                    </div>
+                </CardContent>
+            </Card>
+
+            {/* Results Table */}
+            {hasSearched && (
+                <Card className="shadow-md">
+                    <CardHeader>
+                        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                            <div>
+                                <CardTitle>Student List</CardTitle>
+                                <CardDescription>
+                                    Found {students.length} students for {selectedCourse} - Sem {selectedSemester} ({selectedYear})
+                                </CardDescription>
+                            </div>
+
+                            {/* Client-side Section Filter */}
+                            {students.length > 0 && (
+                                <div className="w-[200px]">
+                                    <Select
+                                        value={selectedSection}
+                                        onValueChange={setSelectedSection}
+                                    >
+                                        <SelectTrigger>
+                                            <SelectValue placeholder="Filter by Section" />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            <SelectItem value="ALL">All Sections</SelectItem>
+                                            {Array.from(new Set(students.map(s => s.section || 'Unknown')))
+                                                .sort()
+                                                .map((sec: any) => (
+                                                    <SelectItem key={sec} value={sec}>
+                                                        Section {sec}
+                                                    </SelectItem>
+                                                ))
+                                            }
+                                        </SelectContent>
+                                    </Select>
+                                </div>
                             )}
                         </div>
-                        <div className="grid gap-2">
-                            <Label htmlFor="student_id">Student ID / Name</Label>
-                            <Input id="student_id" value={editingItem?.student_id || ''} onChange={e => setEditingItem({ ...editingItem, student_id: e.target.value })} required />
-                        </div>
-                        <div className="grid grid-cols-3 gap-4">
-                            <div className="grid gap-2">
-                                <Label htmlFor="internal_1">Internal I</Label>
-                                <Input id="internal_1" type="number" value={editingItem?.internal_1 || ''} onChange={e => setEditingItem({ ...editingItem, internal_1: parseFloat(e.target.value) })} />
+                    </CardHeader>
+                    <CardContent>
+                        {studentError ? (
+                            <div className="p-4 text-center text-red-600 bg-red-50 rounded-lg border border-red-100">
+                                <p className="font-semibold">Error loading data</p>
+                                <p className="text-sm mt-1">{studentError}</p>
                             </div>
-                            <div className="grid gap-2">
-                                <Label htmlFor="internal_2">Internal II</Label>
-                                <Input id="internal_2" type="number" value={editingItem?.internal_2 || ''} onChange={e => setEditingItem({ ...editingItem, internal_2: parseFloat(e.target.value) })} />
+                        ) : students.length === 0 ? (
+                            <div className="text-center py-10 text-gray-500">
+                                No students found matching the selected criteria.
                             </div>
-                            <div className="grid gap-2">
-                                <Label htmlFor="assignment_attendance">Assign/Att</Label>
-                                <Input id="assignment_attendance" type="number" value={editingItem?.assignment_attendance || ''} onChange={e => setEditingItem({ ...editingItem, assignment_attendance: parseFloat(e.target.value) })} />
+                        ) : (
+                            <div className="border rounded-md overflow-hidden">
+                                <Table>
+                                    <TableHeader className="bg-gray-50">
+                                        <TableRow>
+                                            <TableHead className="w-[100px]">Reg No</TableHead>
+                                            <TableHead>Student Name</TableHead>
+                                            <TableHead>Section</TableHead>
+                                        </TableRow>
+                                    </TableHeader>
+                                    <TableBody>
+                                        {students
+                                            .filter(student => selectedSection === 'ALL' || (student.section || 'Unknown') === selectedSection)
+                                            .map((student: any, index: number) => (
+                                                <TableRow key={student.registrationno || index}>
+                                                    <TableCell className="font-medium">{student.registrationno}</TableCell>
+                                                    <TableCell>{student.name}</TableCell>
+                                                    <TableCell>{student.section || '-'}</TableCell>
+                                                </TableRow>
+                                            ))}
+                                    </TableBody>
+                                </Table>
                             </div>
-                        </div>
-                        <div className="flex justify-end">
-                            <Button type="submit">Save</Button>
-                        </div>
-                    </form>
-                </DialogContent>
-            </Dialog>
+                        )}
+                    </CardContent>
+                </Card>
+            )}
         </div>
     )
 }
