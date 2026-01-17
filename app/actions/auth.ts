@@ -2,6 +2,7 @@
 
 import { createClient } from '@/lib/supabase/server'
 import { cookies } from 'next/headers'
+import { findUserCredentials, sendCredentialsEmail } from '@/lib/auth-service'
 
 function getBaseUrl() {
     if (process.env.NEXT_PUBLIC_APP_URL) {
@@ -271,42 +272,25 @@ export async function forgotPasswordAction(prevState: any, formData: FormData) {
     }
 
     try {
-        const baseUrl = getBaseUrl();
-        // Fetch user credentials from API
-        const response = await fetch(`${baseUrl}/api/forgot-password`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email, userType }),
-        })
+        // 1. Get Credentials
+        const userCredentials = await findUserCredentials(email, userType);
 
-        const data = await response.json()
-
-        if (!response.ok) {
-            return { error: data.error || 'User not found' }
+        if (!userCredentials || !userCredentials.success) {
+            return { error: 'User not found' };
         }
 
-        // Send email with credentials
-        const emailResponse = await fetch(`${baseUrl}/api/send-email`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                to: data.email,
-                userId: data.userId,
-                password: data.password,
-                name: data.name || data.userId,
-                userType: data.userType
-            }),
-        })
+        // 2. Send Email
+        await sendCredentialsEmail({
+            to: userCredentials.email,
+            userId: userCredentials.userId,
+            password: userCredentials.password,
+            name: userCredentials.name,
+            userType: userCredentials.userType
+        });
 
-        const emailData = await emailResponse.json()
-
-        if (!emailResponse.ok) {
-            return { error: emailData.error || 'Failed to send email' }
-        }
-
-        return { success: true, message: 'Credentials have been sent to your email address', email: data.email }
-    } catch (err: any) {
-        console.error('Forgot password error:', err)
-        return { error: `Internal server error: ${err.message}` }
+        return { success: true, message: 'Credentials have been sent to your email address', email: userCredentials.email }
+    } catch (error: any) {
+        console.error('Forgot password error:', error)
+        return { error: error.message || 'An unexpected error occurred' }
     }
 }
