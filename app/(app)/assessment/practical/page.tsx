@@ -160,7 +160,7 @@ export default function PracticalAssessmentPage() {
             if (result.data && Array.isArray(result.data)) {
                 // Filter by Academic Year and Semester if provided
                 let filteredData = result.data;
-                
+
                 if (filterYear) {
                     filteredData = filteredData.filter((item: any) => item.Academicyear === filterYear);
                 }
@@ -194,7 +194,7 @@ export default function PracticalAssessmentPage() {
                 });
 
                 setSubjects(Array.from(uniqueSubjects.values()));
-                
+
                 // Clear selected subject if it's no longer in the filtered list
                 if (selectedSubject) {
                     const subjectExists = Array.from(uniqueSubjects.values()).some(
@@ -388,7 +388,7 @@ export default function PracticalAssessmentPage() {
                     <Button variant="ghost" size="icon" onClick={() => { setEditingItem(row.original); setOpen(true); }}>
                         <Pencil className="w-4 h-4" />
                     </Button>
-                    <Button variant="ghost" size="icon" className="text-red-500" onClick={() => handleDelete(row.original.id)}>
+                    <Button variant="ghost" size="icon" className="text-red-500" onClick={() => row.original.id && handleDelete(row.original.id)}>
                         <Trash2 className="w-4 h-4" />
                     </Button>
                 </div>
@@ -841,7 +841,7 @@ export default function PracticalAssessmentPage() {
                                         {students
                                             .filter(student => selectedSection === 'ALL' || (student.section || 'Unknown') === selectedSection)
                                             .map((student: any, index: number) => (
-                                                <TableRow 
+                                                <TableRow
                                                     key={student.registrationno || index}
                                                     className={selectedStudents.has(student.registrationno) ? 'bg-blue-50' : ''}
                                                 >
