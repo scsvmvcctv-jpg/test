@@ -3,6 +3,16 @@
 import { createClient } from '@/lib/supabase/server'
 import { cookies } from 'next/headers'
 
+function getBaseUrl() {
+    if (process.env.NEXT_PUBLIC_APP_URL) {
+        return process.env.NEXT_PUBLIC_APP_URL;
+    }
+    if (process.env.VERCEL_URL) {
+        return `https://${process.env.VERCEL_URL}`;
+    }
+    return 'http://localhost:3000';
+}
+
 export async function loginAction(prevState: any, formData: FormData) {
     const userId = formData.get('email') as string // Reusing the email field for UserID
     const password = formData.get('password') as string
@@ -261,8 +271,9 @@ export async function forgotPasswordAction(prevState: any, formData: FormData) {
     }
 
     try {
+        const baseUrl = getBaseUrl();
         // Fetch user credentials from API
-        const response = await fetch(`${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/api/forgot-password`, {
+        const response = await fetch(`${baseUrl}/api/forgot-password`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ email, userType }),
@@ -275,7 +286,7 @@ export async function forgotPasswordAction(prevState: any, formData: FormData) {
         }
 
         // Send email with credentials
-        const emailResponse = await fetch(`${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/api/send-email`, {
+        const emailResponse = await fetch(`${baseUrl}/api/send-email`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
