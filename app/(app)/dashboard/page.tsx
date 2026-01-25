@@ -71,12 +71,12 @@ export default async function DashboardPage() {
                         // Filter by Academic Year
                         if (academicYear && item.Academicyear !== academicYear) return false;
                         
-                        // Filter by Semester Type (Even = semesters 2, 4, 6, 8)
-                        const sem = Number(item.Semester);
-                        if (semesterType === "Even" && sem % 2 !== 0) return false;
-                        if (semesterType === "Odd" && sem % 2 === 0) return false;
-                        
-                        return true;
+                    // Filter by Semester Type (Even = semesters 2, 4, 6, 8)
+                    const sem = Number(item.Semester);
+                    // semesterType is always "Even" (readonly), so only check for even semesters
+                    if (sem % 2 !== 0) return false; // Exclude odd semesters
+                    
+                    return true;
                     });
                     
                     // Calculate total periods from filtered workload entries
