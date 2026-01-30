@@ -14,6 +14,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Loader2, Plus, Pencil, Trash2, Upload, Download, FileText, ExternalLink, FileDown, Printer } from 'lucide-react'
+import { fetchFilterOptions } from '@/app/actions/assessment'
 import { ColumnDef } from '@tanstack/react-table'
 import { format } from 'date-fns'
 import Papa from 'papaparse'
@@ -34,6 +35,12 @@ type SubjectItem = {
     name: string
     displayName: string
 }
+
+type DeptOption = { id: string; name: string }
+const FALLBACK_DEPARTMENTS: DeptOption[] = [
+    { id: '1', name: 'CSE' }, { id: '2', name: 'ECE' }, { id: '3', name: 'EEE' },
+    { id: '4', name: 'MECH' }, { id: '5', name: 'CIVIL' }, { id: '6', name: 'IT' }, { id: '7', name: 'AUTO' }
+]
 
 export default function AssignmentsPage() {
     const [data, setData] = useState<Assignment[]>([])
@@ -56,6 +63,7 @@ export default function AssignmentsPage() {
 
     // Store user profile data for refetching
     const [userProfile, setUserProfile] = useState<{ emp_id: string; department_no: string } | null>(null)
+    const [departments, setDepartments] = useState<DeptOption[]>([])
 
     useEffect(() => {
         initializeData()
@@ -66,7 +74,7 @@ export default function AssignmentsPage() {
         const refetchSubjects = async () => {
             if (userProfile?.emp_id && userProfile?.department_no) {
                 setLoadingSubjects(true)
-                await fetchSubjects(userProfile.emp_id, userProfile.department_no, academicYear, semesterType)
+                await fetchSubjects(userProfile.emp_id, userProfile.department_no, academicYear, semesterType, departments)
                 setLoadingSubjects(false)
             }
         }
@@ -84,6 +92,22 @@ export default function AssignmentsPage() {
         const { data: { user } } = await supabase.auth.getUser()
         if (!user) return
 
+        // Fetch departments for "other dept" subjects (same as lecture-plan)
+        let deptList: DeptOption[] = []
+        const filterResult = await fetchFilterOptions()
+        if (filterResult.success && filterResult.data) {
+            const raw = filterResult.data as any
+            const arr = raw.departments ?? raw.Department ?? raw.Dept
+            if (Array.isArray(arr) && arr.length) {
+                deptList = arr.map((d: any) => ({
+                    id: String(d.DeptID ?? d.DeptNo ?? d.DepartmentNo ?? d.id ?? ''),
+                    name: d.DepartmentName || d.DeptName || d.name || 'Unknown'
+                })).filter((d: DeptOption) => d.id)
+            }
+        }
+        if (!deptList.length) deptList = [...FALLBACK_DEPARTMENTS]
+        setDepartments(deptList)
+
         // Fetch User Profile
         const { data: profile } = await supabase
             .from('profiles')
@@ -93,7 +117,7 @@ export default function AssignmentsPage() {
 
         if (profile?.emp_id && profile?.department_no) {
             setUserProfile({ emp_id: profile.emp_id, department_no: profile.department_no })
-            await fetchSubjects(profile.emp_id, profile.department_no, academicYear, semesterType)
+            await fetchSubjects(profile.emp_id, profile.department_no, academicYear, semesterType, deptList)
         }
 
         // Fetch Assignments
@@ -103,68 +127,99 @@ export default function AssignmentsPage() {
         setLoadingSubjects(false)
     }
 
-    const fetchSubjects = async (empId: string, deptId: string, filterYear?: string, filterSemester?: string) => {
+    const fetchSubjects = async (
+        empId: string,
+        deptId: string,
+        filterYear?: string,
+        filterSemester?: string,
+        depts: DeptOption[] = []
+    ) => {
         try {
             const { data: { session } } = await supabase.auth.getSession();
             const token = session?.access_token;
+            const getDeptName = (id: string) => depts.find(d => String(d.id) === String(id))?.name ?? id;
 
-            const res = await fetch(`/api/faculty-workload?EmpId=${empId}&Dept=${deptId}`, {
-                headers: {
-                    'Authorization': `Bearer ${token}`
+            const fetchWorkloadForDept = async (dept: string): Promise<any[]> => {
+                const res = await fetch(`/api/faculty-workload?EmpId=${empId}&Dept=${dept}`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                const result = await res.json();
+                if (!res.ok || result?.error) return [];
+                const arr = Array.isArray(result?.data) ? result.data : (Array.isArray(result) ? result : []);
+                return arr;
+            };
+
+            const applyYearSemesterFilter = (items: any[]) => {
+                let filtered = items;
+                if (filterYear && filtered.length) {
+                    const yearPrefix = filterYear.split('-')[0];
+                    filtered = filtered.filter((item: any) => {
+                        const y = item.Academicyear;
+                        return y === filterYear || (typeof y === 'string' && y.startsWith(yearPrefix));
+                    });
                 }
-            })
-            const result = await res.json()
-
-            if (result.data && Array.isArray(result.data)) {
-                // Filter by Academic Year and Semester if provided
-                let filteredData = result.data;
-                
-                if (filterYear) {
-                    filteredData = filteredData.filter((item: any) => item.Academicyear === filterYear);
-                }
-
                 if (filterSemester) {
-                    filteredData = filteredData.filter((item: any) => {
+                    filtered = filtered.filter((item: any) => {
                         const sem = Number(item.Semester);
-                        if (filterSemester === "Odd") {
-                            return sem % 2 !== 0; // Odd semesters: 1, 3, 5, 7
-                        } else if (filterSemester === "Even") {
-                            return sem % 2 === 0; // Even semesters: 2, 4, 6, 8
-                        }
+                        if (filterSemester === "Odd") return sem % 2 !== 0;
+                        if (filterSemester === "Even") return sem % 2 === 0;
                         return true;
                     });
                 }
+                return filtered;
+            };
 
-                // Extract unique subjects from filtered data
-                const uniqueSubjects = new Map<string, SubjectItem>();
+            const uniqueSubjects = new Map<string, SubjectItem>();
+            const otherDeptIds = depts.map(d => d.id).filter(id => String(id) !== String(deptId));
 
-                filteredData.forEach((item: any) => {
+            // 1. User's own department (API may also return other-dept rows in same call)
+            const ownDeptData = await fetchWorkloadForDept(deptId);
+            const ownFiltered = applyYearSemesterFilter(ownDeptData);
+            ownFiltered.forEach((item: any) => {
+                if (!item.SubjectCode || !item.Subject_Name) return;
+                const isOtherDept = item.Dept != null && String(item.Dept) !== String(deptId);
+                const deptName = isOtherDept ? (item.DepartmentName || item.DeptName || getDeptName(String(item.Dept))) : null;
+                const displayName = isOtherDept
+                    ? `${item.SubjectCode} - ${item.Subject_Name} (${deptName})`
+                    : `${item.SubjectCode} - ${item.Subject_Name}`;
+                if (!uniqueSubjects.has(displayName)) {
+                    uniqueSubjects.set(displayName, {
+                        code: item.SubjectCode,
+                        name: item.Subject_Name,
+                        displayName
+                    });
+                }
+            });
+
+            // 2. Other departments
+            for (const otherId of otherDeptIds) {
+                const otherData = await fetchWorkloadForDept(otherId);
+                const otherFiltered = applyYearSemesterFilter(otherData);
+                const deptName = getDeptName(otherId);
+                otherFiltered.forEach((item: any) => {
                     if (item.SubjectCode && item.Subject_Name) {
-                        const key = `${item.SubjectCode}-${item.Subject_Name}`;
-                        if (!uniqueSubjects.has(key)) {
-                            uniqueSubjects.set(key, {
+                        const displayName = `${item.SubjectCode} - ${item.Subject_Name} (${deptName})`;
+                        if (!uniqueSubjects.has(displayName)) {
+                            uniqueSubjects.set(displayName, {
                                 code: item.SubjectCode,
                                 name: item.Subject_Name,
-                                displayName: `${item.SubjectCode} - ${item.Subject_Name}`
+                                displayName
                             });
                         }
                     }
                 });
+            }
 
-                setSubjects(Array.from(uniqueSubjects.values()));
-                
-                // Clear selected subject if it's no longer in the filtered list
-                if (selectedSubject) {
-                    const subjectExists = Array.from(uniqueSubjects.values()).some(
-                        subj => subj.displayName === selectedSubject
-                    );
-                    if (!subjectExists) {
-                        setSelectedSubject("");
-                    }
-                }
+            const merged = Array.from(uniqueSubjects.values());
+            setSubjects(merged);
+
+            if (selectedSubject) {
+                const exists = merged.some(s => s.displayName === selectedSubject);
+                if (!exists) setSelectedSubject("");
             }
         } catch (error) {
-            console.error("Failed to fetch subjects", error)
+            console.error("Failed to fetch subjects", error);
+            setSubjects([]);
         }
     }
 

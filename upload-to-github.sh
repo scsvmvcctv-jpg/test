@@ -1,24 +1,18 @@
 #!/bin/bash
-# Run this script to push the project to GitHub
-# Repo: https://github.com/scsvmvcctv-jpg/cse-admin
+# Push this project to https://github.com/scsvmvcctv-jpg/test
 
 set -e
 cd "$(dirname "$0")"
 
-echo "Initializing git..."
-git init
-git branch -M main
-
-echo "Staging files..."
-git add .
-
-echo "Creating initial commit..."
-git commit -m "Initial commit: CSE Admin (lecture plans, workload, assessments)"
-
 echo "Adding remote..."
-git remote add origin https://github.com/scsvmvcctv-jpg/cse-admin.git 2>/dev/null || git remote set-url origin https://github.com/scsvmvcctv-jpg/cse-admin.git
+git remote add origin https://github.com/scsvmvcctv-jpg/test.git 2>/dev/null || git remote set-url origin https://github.com/scsvmvcctv-jpg/test.git
 
-echo "Pushing to GitHub..."
-git push -u origin main
+echo "Staging any changes..."
+git add -A
+git diff --staged --quiet || git commit -m "Update: CSE Admin (lecture plans, workload, assessments)"
 
-echo "Done! Project is at https://github.com/scsvmvcctv-jpg/cse-admin"
+echo "Pushing to GitHub (you may be prompted to sign in)..."
+echo "Note: test repo has existing content. Using --force to replace with this project."
+git push -u origin main --force
+
+echo "Done! Project is at https://github.com/scsvmvcctv-jpg/test"
