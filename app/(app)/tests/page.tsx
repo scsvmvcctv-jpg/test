@@ -28,6 +28,7 @@ import Papa from 'papaparse'
 type Test = {
     id: string
     subject: string
+    section: string | null
     proposed_test_date: string
     actual_date: string
     date_returned: string
@@ -46,6 +47,9 @@ const FALLBACK_DEPARTMENTS: DeptOption[] = [
     { id: '4', name: 'MECH' }, { id: '5', name: 'CIVIL' }, { id: '6', name: 'IT' }, { id: '7', name: 'AUTO' }
 ]
 
+const SECTION_OPTIONS = ['S1', 'S2', 'S3', 'S4', 'S5', 'S6']
+const EXPECTED_CSV_HEADERS = ['subject', 'section', 'proposed_test_date', 'actual_date', 'date_returned', 'remarks']
+
 export default function TestsPage() {
     const [data, setData] = useState<Test[]>([])
     const [loading, setLoading] = useState(true)
@@ -57,7 +61,8 @@ export default function TestsPage() {
 
     // Subject Filter State
     const [subjects, setSubjects] = useState<SubjectItem[]>([])
-    const [selectedSubject, setSelectedSubject] = useState<string>("")
+    const [selectedSubject, setSelectedSubject] = useState<string>("__ALL__")
+    const [selectedSection, setSelectedSection] = useState<string>("")
     const [loadingSubjects, setLoadingSubjects] = useState(false)
 
     // Academic Year and Semester Filter State
@@ -216,9 +221,9 @@ export default function TestsPage() {
             const merged = Array.from(uniqueSubjects.values());
             setSubjects(merged);
 
-            if (selectedSubject) {
+            if (selectedSubject && selectedSubject !== '__ALL__') {
                 const exists = merged.some(s => s.displayName === selectedSubject);
-                if (!exists) setSelectedSubject("");
+                if (!exists) setSelectedSubject('__ALL__');
             }
         } catch (error) {
             console.error("Failed to fetch subjects", error);
@@ -246,9 +251,12 @@ export default function TestsPage() {
         const { data: { user } } = await supabase.auth.getUser()
         if (!user) return
 
-        const item = {
+        const item: any = {
             ...editingItem,
             staff_id: user.id,
+        }
+        if (item.section === '' || item.section === undefined) {
+            item.section = null
         }
 
         let error
@@ -289,6 +297,16 @@ export default function TestsPage() {
                     return
                 }
 
+                const fileHeaders = results.meta?.fields ?? (Array.isArray(results.data) && results.data[0] ? Object.keys(results.data[0] as object) : [])
+                const normalized = fileHeaders.map((h: string) => String(h).trim().toLowerCase())
+                const missing = EXPECTED_CSV_HEADERS.filter(h => !normalized.includes(h))
+                if (missing.length > 0) {
+                    alert(`Invalid CSV format. Expected columns: ${EXPECTED_CSV_HEADERS.join(', ')}\n\nMissing: ${missing.join(', ')}\n\nPlease download the sample CSV and use that format.`)
+                    setImporting(false)
+                    if (fileInputRef.current) fileInputRef.current.value = ''
+                    return
+                }
+
                 const rows = results.data as any[]
                 const validRows = rows.map(row => {
                     const safeParseDate = (dateStr: string) => {
@@ -321,6 +339,10 @@ export default function TestsPage() {
                         actual_date: safeParseDate(row.actual_date || row.ActualDate),
                         date_returned: safeParseDate(row.date_returned || row.DateReturned || row.ReturnedDate),
                         remarks: row.remarks || row.Remarks
+                    }
+                    const sectionVal = row.section || row.Section
+                    if (sectionVal !== undefined && sectionVal !== null && String(sectionVal).trim()) {
+                        item.section = String(sectionVal).trim()
                     }
 
                     // If ID exists in CSV, include it for update
@@ -356,9 +378,10 @@ export default function TestsPage() {
 
     const downloadSample = () => {
         // Pre-fill subject name if filter is selected
-        const defaultSubject = selectedSubject ? subjects.find(s => s.displayName === selectedSubject)?.name || selectedSubject : "Mathematics";
+        const defaultSubject = (selectedSubject && selectedSubject !== '__ALL__') ? subjects.find(s => s.displayName === selectedSubject)?.name || selectedSubject : "Mathematics"
+        const defaultSection = selectedSection || "S1"
 
-        const csvContent = `id,subject,proposed_test_date,actual_date,date_returned,remarks\n,${defaultSubject},2024-02-15,2024-02-15,2024-02-20,Unit Test 1`
+        const csvContent = `id,subject,section,proposed_test_date,actual_date,date_returned,remarks\n,${defaultSubject},${defaultSection},2024-02-15,2024-02-15,2024-02-20,Unit Test 1`
         const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
         const link = document.createElement('a')
         if (link.download !== undefined) {
@@ -373,7 +396,7 @@ export default function TestsPage() {
     }
 
     const handleExport = () => {
-        const dataToExport = selectedSubject ? filteredData : data;
+        const dataToExport = dataToShow;
 
         if (dataToExport.length === 0) {
             alert('No data to export');
@@ -384,6 +407,7 @@ export default function TestsPage() {
         const csvRows = dataToExport.map(item => ({
             id: item.id,
             subject: item.subject,
+            section: item.section || '',
             proposed_test_date: item.proposed_test_date ? format(new Date(item.proposed_test_date), 'yyyy-MM-dd') : '',
             actual_date: item.actual_date ? format(new Date(item.actual_date), 'yyyy-MM-dd') : '',
             date_returned: item.date_returned ? format(new Date(item.date_returned), 'yyyy-MM-dd') : '',
@@ -396,7 +420,7 @@ export default function TestsPage() {
         if (link.download !== undefined) {
             const url = URL.createObjectURL(blob);
             link.setAttribute('href', url);
-            link.setAttribute('download', `tests_schedule_${selectedSubject || 'all'}_${format(new Date(), 'yyyyMMdd')}.csv`);
+            link.setAttribute('download', `tests_schedule_${showAllSubjects ? 'all' : selectedSubject}_${format(new Date(), 'yyyyMMdd')}.csv`);
             link.style.visibility = 'hidden';
             document.body.appendChild(link);
             link.click();
@@ -405,7 +429,7 @@ export default function TestsPage() {
     }
 
     const handlePrint = () => {
-        const dataToPrint = selectedSubject ? filteredData : data;
+        const dataToPrint = dataToShow;
 
         if (dataToPrint.length === 0) {
             alert('No data to print');
@@ -416,14 +440,15 @@ export default function TestsPage() {
         const printWindow = window.open('', '_blank');
         if (!printWindow) return;
 
-        const subjectName = selectedSubject || 'All Subjects';
+        const subjectName = showAllSubjects ? 'All Subjects' : selectedSubject;
+        const sectionLabel = selectedSection ? ` | Section: ${selectedSection}` : '';
         const currentDate = format(new Date(), 'dd/MM/yyyy');
         
         let printContent = `
             <!DOCTYPE html>
             <html>
             <head>
-                <title>Tests Schedule - ${subjectName}</title>
+                <title>Tests Schedule - ${subjectName}${sectionLabel}</title>
                 <style>
                     @media print {
                         @page {
@@ -489,7 +514,7 @@ export default function TestsPage() {
             <body>
                 <div class="header">
                     <h1>TESTS SCHEDULE</h1>
-                    <p><strong>Subject:</strong> ${subjectName}</p>
+                    <p><strong>Subject:</strong> ${subjectName}${sectionLabel}</p>
                     <p><strong>Academic Year:</strong> ${academicYear} | <strong>Semester:</strong> ${semesterType}</p>
                     <p><strong>Date:</strong> ${currentDate}</p>
                 </div>
@@ -497,7 +522,8 @@ export default function TestsPage() {
                     <thead>
                         <tr>
                             <th style="width: 5%;">S.No</th>
-                            <th style="width: 20%;">Subject</th>
+                            <th style="width: 8%;">Section</th>
+                            <th style="width: 18%;">Subject</th>
                             <th style="width: 15%;">Proposed Date</th>
                             <th style="width: 15%;">Actual Date</th>
                             <th style="width: 15%;">Date Returned</th>
@@ -515,6 +541,7 @@ export default function TestsPage() {
             printContent += `
                         <tr>
                             <td style="text-align: center;">${index + 1}</td>
+                            <td style="text-align: center;">${item.section || '-'}</td>
                             <td>${item.subject || '-'}</td>
                             <td style="text-align: center;">${proposedDate}</td>
                             <td style="text-align: center;">${actualDate}</td>
@@ -543,17 +570,25 @@ export default function TestsPage() {
         }, 250);
     }
 
-    // Filter Logic
-    const filteredData = selectedSubject
+    const showAllSubjects = selectedSubject === '__ALL__'
+    const filteredData = !showAllSubjects && selectedSubject
         ? data.filter(item => {
             const subjObj = subjects.find(s => s.displayName === selectedSubject);
-            if (!subjObj) return item.subject === selectedSubject;
-            return item.subject === subjObj.name || item.subject === subjObj.code || item.subject === selectedSubject;
+            const subjectMatch = !subjObj ? item.subject === selectedSubject : (item.subject === subjObj.name || item.subject === subjObj.code || item.subject === selectedSubject);
+            if (!subjectMatch) return false;
+            if (selectedSection) {
+                return (item.section || '') === selectedSection;
+            }
+            return true;
         })
-        : [];
+        : []
+    const dataToShow = showAllSubjects
+        ? (selectedSection ? data.filter(item => (item.section || '') === selectedSection) : data)
+        : filteredData
 
     const columns: ColumnDef<Test>[] = [
         { accessorKey: 'subject', header: 'Subject' },
+        { accessorKey: 'section', header: 'Section', cell: ({ row }) => row.original.section || '-' },
         {
             accessorKey: 'proposed_test_date',
             header: 'Proposed Date',
@@ -586,69 +621,16 @@ export default function TestsPage() {
     ]
 
     const handleAddItem = () => {
-        const subjObj = subjects.find(s => s.displayName === selectedSubject);
-        setEditingItem({
-            subject: subjObj ? subjObj.name : ''
-        });
-        setOpen(true);
+        const subjObj = (selectedSubject && selectedSubject !== '__ALL__') ? subjects.find(s => s.displayName === selectedSubject) : undefined
+        setEditingItem({ subject: subjObj ? subjObj.name : '', section: selectedSection || null })
+        setOpen(true)
     }
 
     if (loading) return <div className="flex justify-center p-8"><Loader2 className="animate-spin" /></div>
 
     return (
         <div className="space-y-6">
-            {!selectedSubject ? (
-                // Show only dropdown when no subject is selected
-                <div className="flex flex-col gap-4">
-                    <h1 className="text-3xl font-bold">Tests Schedule</h1>
-                    <div className="flex items-center gap-4 bg-muted/30 p-4 rounded-lg flex-wrap">
-                        {/* Academic Year Filter */}
-                        <div className="grid gap-2">
-                            <Label>Academic Year</Label>
-                            <Select value={academicYear} onValueChange={setAcademicYear}>
-                                <SelectTrigger className="w-[140px] h-8 bg-background">
-                                    <SelectValue placeholder="Select Year" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="2025-2026">2025-2026</SelectItem>
-                                </SelectContent>
-                            </Select>
-                        </div>
-
-                        {/* Semester Filter */}
-                        <div className="grid gap-2">
-                            <Label>Semester</Label>
-                            <Select value={semesterType} onValueChange={setSemesterType} disabled>
-                                <SelectTrigger className="w-[100px] h-8 bg-background">
-                                    <SelectValue placeholder="Sem Type" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="Even">Even</SelectItem>
-                                </SelectContent>
-                            </Select>
-                        </div>
-
-                        {/* Subject Filter */}
-                        <div className="grid gap-2 w-full max-w-md">
-                            <Label>Select Subject</Label>
-                            <Select value={selectedSubject} onValueChange={setSelectedSubject} disabled={loadingSubjects}>
-                                <SelectTrigger className="bg-background">
-                                    <SelectValue placeholder={loadingSubjects ? "Loading subjects..." : "Select a subject to view schedule..."} />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    {subjects.map((subj) => (
-                                        <SelectItem key={subj.displayName} value={subj.displayName}>
-                                            {subj.displayName}
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                        </div>
-                    </div>
-                </div>
-            ) : (
-                // Show everything when subject is selected
-                <>
+            <>
                     <div className="flex flex-col gap-4">
                         <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
                             <h1 className="text-3xl font-bold">Tests Schedule</h1>
@@ -660,7 +642,7 @@ export default function TestsPage() {
                                     ref={fileInputRef}
                                     onChange={handleFileUpload}
                                 />
-                                <Button variant="outline" onClick={handlePrint} title="Print Tests Schedule" disabled={!selectedSubject || (selectedSubject ? filteredData.length === 0 : data.length === 0)}>
+                                <Button variant="outline" onClick={handlePrint} title="Print Tests Schedule" disabled={dataToShow.length === 0}>
                                     <Printer className="w-4 h-4 mr-2" />
                                     Print
                                 </Button>
@@ -713,11 +695,12 @@ export default function TestsPage() {
                             {/* Subject Filter */}
                             <div className="grid gap-2 w-full max-w-md">
                                 <Label>Select Subject</Label>
-                                <Select value={selectedSubject} onValueChange={setSelectedSubject} disabled={loadingSubjects}>
+                                <Select value={selectedSubject} onValueChange={(v) => { setSelectedSubject(v); setSelectedSection(''); }} disabled={loadingSubjects}>
                                     <SelectTrigger className="bg-background">
-                                        <SelectValue placeholder={loadingSubjects ? "Loading subjects..." : "Select a subject to view schedule..."} />
+                                        <SelectValue placeholder={loadingSubjects ? "Loading subjects..." : "All subjects (show all uploaded)"} />
                                     </SelectTrigger>
                                     <SelectContent>
+                                        <SelectItem value="__ALL__">All subjects (show all uploaded)</SelectItem>
                                         {subjects.map((subj) => (
                                             <SelectItem key={subj.displayName} value={subj.displayName}>
                                                 {subj.displayName}
@@ -726,12 +709,27 @@ export default function TestsPage() {
                                     </SelectContent>
                                 </Select>
                             </div>
+
+                            {/* Section Filter */}
+                            <div className="grid gap-2">
+                                <Label>Section</Label>
+                                <Select value={selectedSection || "ALL"} onValueChange={(v) => setSelectedSection(v === "ALL" ? "" : v)}>
+                                    <SelectTrigger className="w-[100px] h-8 bg-background">
+                                        <SelectValue placeholder="All" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="ALL">All</SelectItem>
+                                        {SECTION_OPTIONS.map((sec) => (
+                                            <SelectItem key={sec} value={sec}>{sec}</SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                            </div>
                         </div>
                     </div>
 
-                    <DataTable columns={columns} data={filteredData} />
-                </>
-            )}
+            <DataTable columns={columns} data={dataToShow} />
+            </>
 
             <Dialog open={open} onOpenChange={setOpen}>
                 <DialogContent>
@@ -742,11 +740,25 @@ export default function TestsPage() {
                         <div className="grid gap-2">
                             <Label htmlFor="subject">Subject</Label>
                             <Input id="subject" value={editingItem?.subject || ''} onChange={e => setEditingItem({ ...editingItem, subject: e.target.value })} required />
-                            {selectedSubject && (
+                            {selectedSubject && selectedSubject !== '__ALL__' && (
                                 <p className="text-xs text-muted-foreground">
                                     Current filter: {selectedSubject}
                                 </p>
                             )}
+                        </div>
+                        <div className="grid gap-2">
+                            <Label>Section</Label>
+                            <Select value={editingItem?.section || "ALL"} onValueChange={(v) => setEditingItem({ ...editingItem, section: v === "ALL" ? null : v })}>
+                                <SelectTrigger className="bg-background">
+                                    <SelectValue placeholder="All" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="ALL">All</SelectItem>
+                                    {SECTION_OPTIONS.map((sec) => (
+                                        <SelectItem key={sec} value={sec}>{sec}</SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
                         </div>
                         <div className="grid grid-cols-2 gap-4">
                             <div className="grid gap-2">

@@ -14,6 +14,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Loader2, Plus, Pencil, Trash2, Upload, Download, FileDown, Printer } from 'lucide-react'
+import { fetchFilterOptions } from '@/app/actions/assessment'
 import { ColumnDef } from '@tanstack/react-table'
 import { format } from 'date-fns'
 import Papa from 'papaparse'
@@ -33,6 +34,13 @@ type SubjectItem = {
     displayName: string
 }
 
+type DeptOption = { id: string; name: string }
+const FALLBACK_DEPARTMENTS: DeptOption[] = [
+    { id: '1', name: 'CSE' }, { id: '2', name: 'ECE' }, { id: '3', name: 'EEE' },
+    { id: '4', name: 'MECH' }, { id: '5', name: 'CIVIL' }, { id: '6', name: 'IT' }, { id: '7', name: 'AUTO' }
+]
+const EXPECTED_CSV_HEADERS = ['subject', 'date', 'period', 'topic', 'remarks']
+
 export default function ExtraClassesPage() {
     const [data, setData] = useState<ExtraClass[]>([])
     const [loading, setLoading] = useState(true)
@@ -44,7 +52,7 @@ export default function ExtraClassesPage() {
 
     // Subject Filter State
     const [subjects, setSubjects] = useState<SubjectItem[]>([])
-    const [selectedSubject, setSelectedSubject] = useState<string>("")
+    const [selectedSubject, setSelectedSubject] = useState<string>("__ALL__")
     const [loadingSubjects, setLoadingSubjects] = useState(false)
 
     // Academic Year and Semester Filter State
@@ -53,6 +61,7 @@ export default function ExtraClassesPage() {
 
     // Store user profile data for refetching
     const [userProfile, setUserProfile] = useState<{ emp_id: string; department_no: string } | null>(null)
+    const [departments, setDepartments] = useState<DeptOption[]>([])
 
     useEffect(() => {
         initializeData()
@@ -63,7 +72,7 @@ export default function ExtraClassesPage() {
         const refetchSubjects = async () => {
             if (userProfile?.emp_id && userProfile?.department_no) {
                 setLoadingSubjects(true)
-                await fetchSubjects(userProfile.emp_id, userProfile.department_no, academicYear, semesterType)
+                await fetchSubjects(userProfile.emp_id, userProfile.department_no, academicYear, semesterType, departments)
                 setLoadingSubjects(false)
             }
         }
@@ -81,7 +90,21 @@ export default function ExtraClassesPage() {
         const { data: { user } } = await supabase.auth.getUser()
         if (!user) return
 
-        // Fetch User Profile
+        let deptList: DeptOption[] = []
+        const filterResult = await fetchFilterOptions()
+        if (filterResult.success && filterResult.data) {
+            const raw = filterResult.data as any
+            const arr = raw.departments ?? raw.Department ?? raw.Dept
+            if (Array.isArray(arr) && arr.length) {
+                deptList = arr.map((d: any) => ({
+                    id: String(d.DeptID ?? d.DeptNo ?? d.DepartmentNo ?? d.id ?? ''),
+                    name: d.DepartmentName || d.DeptName || d.name || 'Unknown'
+                })).filter((d: DeptOption) => d.id)
+            }
+        }
+        if (!deptList.length) deptList = [...FALLBACK_DEPARTMENTS]
+        setDepartments(deptList)
+
         const { data: profile } = await supabase
             .from('profiles')
             .select('emp_id, department_no')
@@ -90,78 +113,105 @@ export default function ExtraClassesPage() {
 
         if (profile?.emp_id && profile?.department_no) {
             setUserProfile({ emp_id: profile.emp_id, department_no: profile.department_no })
-            await fetchSubjects(profile.emp_id, profile.department_no, academicYear, semesterType)
+            await fetchSubjects(profile.emp_id, profile.department_no, academicYear, semesterType, deptList)
         }
 
-        // Fetch Extra Classes
         await fetchExtraClasses(user.id)
-
         setLoading(false)
         setLoadingSubjects(false)
     }
 
-    const fetchSubjects = async (empId: string, deptId: string, filterYear?: string, filterSemester?: string) => {
+    const fetchSubjects = async (
+        empId: string,
+        deptId: string,
+        filterYear?: string,
+        filterSemester?: string,
+        depts: DeptOption[] = []
+    ) => {
         try {
             const { data: { session } } = await supabase.auth.getSession();
             const token = session?.access_token;
+            const getDeptName = (id: string) => depts.find(d => String(d.id) === String(id))?.name ?? id;
 
-            const res = await fetch(`/api/faculty-workload?EmpId=${empId}&Dept=${deptId}`, {
-                headers: {
-                    'Authorization': `Bearer ${token}`
+            const fetchWorkloadForDept = async (dept: string): Promise<any[]> => {
+                const res = await fetch(`/api/faculty-workload?EmpId=${empId}&Dept=${dept}`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                const result = await res.json();
+                if (!res.ok || result?.error) return [];
+                const arr = Array.isArray(result?.data) ? result.data : (Array.isArray(result) ? result : []);
+                return arr;
+            };
+
+            const applyYearSemesterFilter = (items: any[]) => {
+                let filtered = items;
+                if (filterYear && filtered.length) {
+                    const yearPrefix = filterYear.split('-')[0];
+                    filtered = filtered.filter((item: any) => {
+                        const y = item.Academicyear;
+                        return y === filterYear || (typeof y === 'string' && y.startsWith(yearPrefix));
+                    });
                 }
-            })
-            const result = await res.json()
-
-            if (result.data && Array.isArray(result.data)) {
-                // Filter by Academic Year and Semester if provided
-                let filteredData = result.data;
-                
-                if (filterYear) {
-                    filteredData = filteredData.filter((item: any) => item.Academicyear === filterYear);
-                }
-
                 if (filterSemester) {
-                    filteredData = filteredData.filter((item: any) => {
+                    filtered = filtered.filter((item: any) => {
                         const sem = Number(item.Semester);
-                        if (filterSemester === "Odd") {
-                            return sem % 2 !== 0; // Odd semesters: 1, 3, 5, 7
-                        } else if (filterSemester === "Even") {
-                            return sem % 2 === 0; // Even semesters: 2, 4, 6, 8
-                        }
+                        if (filterSemester === "Odd") return sem % 2 !== 0;
+                        if (filterSemester === "Even") return sem % 2 === 0;
                         return true;
                     });
                 }
+                return filtered;
+            };
 
-                // Extract unique subjects from filtered data
-                const uniqueSubjects = new Map<string, SubjectItem>();
+            const uniqueSubjects = new Map<string, SubjectItem>();
+            const otherDeptIds = depts.map(d => d.id).filter(id => String(id) !== String(deptId));
 
-                filteredData.forEach((item: any) => {
+            const ownDeptData = await fetchWorkloadForDept(deptId);
+            const ownFiltered = applyYearSemesterFilter(ownDeptData);
+            ownFiltered.forEach((item: any) => {
+                if (!item.SubjectCode || !item.Subject_Name) return;
+                const isOtherDept = item.Dept != null && String(item.Dept) !== String(deptId);
+                const deptName = isOtherDept ? (item.DepartmentName || item.DeptName || getDeptName(String(item.Dept))) : null;
+                const displayName = isOtherDept
+                    ? `${item.SubjectCode} - ${item.Subject_Name} (${deptName})`
+                    : `${item.SubjectCode} - ${item.Subject_Name}`;
+                if (!uniqueSubjects.has(displayName)) {
+                    uniqueSubjects.set(displayName, {
+                        code: item.SubjectCode,
+                        name: item.Subject_Name,
+                        displayName
+                    });
+                }
+            });
+
+            for (const otherId of otherDeptIds) {
+                const otherData = await fetchWorkloadForDept(otherId);
+                const otherFiltered = applyYearSemesterFilter(otherData);
+                const deptName = getDeptName(otherId);
+                otherFiltered.forEach((item: any) => {
                     if (item.SubjectCode && item.Subject_Name) {
-                        const key = `${item.SubjectCode}-${item.Subject_Name}`;
-                        if (!uniqueSubjects.has(key)) {
-                            uniqueSubjects.set(key, {
+                        const displayName = `${item.SubjectCode} - ${item.Subject_Name} (${deptName})`;
+                        if (!uniqueSubjects.has(displayName)) {
+                            uniqueSubjects.set(displayName, {
                                 code: item.SubjectCode,
                                 name: item.Subject_Name,
-                                displayName: `${item.SubjectCode} - ${item.Subject_Name}`
+                                displayName
                             });
                         }
                     }
                 });
+            }
 
-                setSubjects(Array.from(uniqueSubjects.values()));
-                
-                // Clear selected subject if it's no longer in the filtered list
-                if (selectedSubject) {
-                    const subjectExists = Array.from(uniqueSubjects.values()).some(
-                        subj => subj.displayName === selectedSubject
-                    );
-                    if (!subjectExists) {
-                        setSelectedSubject("");
-                    }
-                }
+            const merged = Array.from(uniqueSubjects.values());
+            setSubjects(merged);
+
+            if (selectedSubject && selectedSubject !== '__ALL__') {
+                const exists = merged.some(s => s.displayName === selectedSubject);
+                if (!exists) setSelectedSubject('__ALL__');
             }
         } catch (error) {
-            console.error("Failed to fetch subjects", error)
+            console.error("Failed to fetch subjects", error);
+            setSubjects([]);
         }
     }
 
@@ -228,6 +278,16 @@ export default function ExtraClassesPage() {
                     return
                 }
 
+                const fileHeaders = results.meta?.fields ?? (Array.isArray(results.data) && results.data[0] ? Object.keys(results.data[0] as object) : [])
+                const normalized = fileHeaders.map((h: string) => String(h).trim().toLowerCase())
+                const missing = EXPECTED_CSV_HEADERS.filter(h => !normalized.includes(h))
+                if (missing.length > 0) {
+                    alert(`Invalid CSV format. Expected columns: ${EXPECTED_CSV_HEADERS.join(', ')}\n\nMissing: ${missing.join(', ')}\n\nPlease download the sample CSV and use that format.`)
+                    setImporting(false)
+                    if (fileInputRef.current) fileInputRef.current.value = ''
+                    return
+                }
+
                 const rows = results.data as any[]
                 const validRows = rows.map(row => {
                     const safeParseDate = (dateStr: string) => {
@@ -287,7 +347,7 @@ export default function ExtraClassesPage() {
 
     const downloadSample = () => {
         // Pre-fill subject name if filter is selected
-        const defaultSubject = selectedSubject ? subjects.find(s => s.displayName === selectedSubject)?.name || selectedSubject : "Mathematics";
+        const defaultSubject = (selectedSubject && selectedSubject !== '__ALL__') ? subjects.find(s => s.displayName === selectedSubject)?.name || selectedSubject : "Mathematics";
 
         const csvContent = `id,subject,date,period,topic,remarks\n,${defaultSubject},2024-02-15,1,Special Lecture on AI,Guest Speaker\n,Physics,2024-03-10,3,Remedial Class,For slow learners`
         const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
@@ -304,7 +364,7 @@ export default function ExtraClassesPage() {
     }
 
     const handleExport = () => {
-        const dataToExport = selectedSubject ? filteredData : data;
+        const dataToExport = dataToShow;
 
         if (dataToExport.length === 0) {
             alert('No data to export');
@@ -327,7 +387,7 @@ export default function ExtraClassesPage() {
         if (link.download !== undefined) {
             const url = URL.createObjectURL(blob);
             link.setAttribute('href', url);
-            link.setAttribute('download', `extra_classes_${selectedSubject || 'all'}_${format(new Date(), 'yyyyMMdd')}.csv`);
+            link.setAttribute('download', `extra_classes_${showAllSubjects ? 'all' : selectedSubject}_${format(new Date(), 'yyyyMMdd')}.csv`);
             link.style.visibility = 'hidden';
             document.body.appendChild(link);
             link.click();
@@ -336,7 +396,7 @@ export default function ExtraClassesPage() {
     }
 
     const handlePrint = () => {
-        const dataToPrint = selectedSubject ? filteredData : data;
+        const dataToPrint = dataToShow;
 
         if (dataToPrint.length === 0) {
             alert('No data to print');
@@ -347,7 +407,7 @@ export default function ExtraClassesPage() {
         const printWindow = window.open('', '_blank');
         if (!printWindow) return;
 
-        const subjectName = selectedSubject || 'All Subjects';
+        const subjectName = showAllSubjects ? 'All Subjects' : selectedSubject;
         const currentDate = format(new Date(), 'dd/MM/yyyy');
         
         let printContent = `
@@ -472,14 +532,15 @@ export default function ExtraClassesPage() {
         }, 250);
     }
 
-    // Filter Logic
-    const filteredData = selectedSubject
+    const showAllSubjects = selectedSubject === '__ALL__'
+    const filteredData = !showAllSubjects && selectedSubject
         ? data.filter(item => {
             const subjObj = subjects.find(s => s.displayName === selectedSubject);
             if (!subjObj) return item.subject === selectedSubject;
             return item.subject === subjObj.name || item.subject === subjObj.code || item.subject === selectedSubject;
         })
-        : [];
+        : []
+    const dataToShow = showAllSubjects ? data : filteredData
 
     const columns: ColumnDef<ExtraClass>[] = [
         { accessorKey: 'subject', header: 'Subject' },
@@ -507,69 +568,16 @@ export default function ExtraClassesPage() {
     ]
 
     const handleAddItem = () => {
-        const subjObj = subjects.find(s => s.displayName === selectedSubject);
-        setEditingItem({
-            subject: subjObj ? subjObj.name : ''
-        });
-        setOpen(true);
+        const subjObj = (selectedSubject && selectedSubject !== '__ALL__') ? subjects.find(s => s.displayName === selectedSubject) : undefined
+        setEditingItem({ subject: subjObj ? subjObj.name : '' })
+        setOpen(true)
     }
 
     if (loading) return <div className="flex justify-center p-8"><Loader2 className="animate-spin" /></div>
 
     return (
         <div className="space-y-6">
-            {!selectedSubject ? (
-                // Show only dropdown when no subject is selected
-                <div className="flex flex-col gap-4">
-                    <h1 className="text-3xl font-bold">Extra Classes</h1>
-                    <div className="flex items-center gap-4 bg-muted/30 p-4 rounded-lg flex-wrap">
-                        {/* Academic Year Filter */}
-                        <div className="grid gap-2">
-                            <Label>Academic Year</Label>
-                            <Select value={academicYear} onValueChange={setAcademicYear}>
-                                <SelectTrigger className="w-[140px] h-8 bg-background">
-                                    <SelectValue placeholder="Select Year" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="2025-2026">2025-2026</SelectItem>
-                                </SelectContent>
-                            </Select>
-                        </div>
-
-                        {/* Semester Filter */}
-                        <div className="grid gap-2">
-                            <Label>Semester</Label>
-                            <Select value={semesterType} onValueChange={setSemesterType} disabled>
-                                <SelectTrigger className="w-[100px] h-8 bg-background">
-                                    <SelectValue placeholder="Sem Type" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="Even">Even</SelectItem>
-                                </SelectContent>
-                            </Select>
-                        </div>
-
-                        {/* Subject Filter */}
-                        <div className="grid gap-2 w-full max-w-md">
-                            <Label>Select Subject</Label>
-                            <Select value={selectedSubject} onValueChange={setSelectedSubject} disabled={loadingSubjects}>
-                                <SelectTrigger className="bg-background">
-                                    <SelectValue placeholder={loadingSubjects ? "Loading subjects..." : "Select a subject to view extra classes..."} />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    {subjects.map((subj) => (
-                                        <SelectItem key={subj.displayName} value={subj.displayName}>
-                                            {subj.displayName}
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                        </div>
-                    </div>
-                </div>
-            ) : (
-                // Show everything when subject is selected
-                <>
+            <>
                     <div className="flex flex-col gap-4">
                         <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
                             <h1 className="text-3xl font-bold">Extra Classes</h1>
@@ -581,7 +589,7 @@ export default function ExtraClassesPage() {
                                     ref={fileInputRef}
                                     onChange={handleFileUpload}
                                 />
-                                <Button variant="outline" onClick={handlePrint} title="Print Extra Classes" disabled={!selectedSubject || (selectedSubject ? filteredData.length === 0 : data.length === 0)}>
+                                <Button variant="outline" onClick={handlePrint} title="Print Extra Classes" disabled={dataToShow.length === 0}>
                                     <Printer className="w-4 h-4 mr-2" />
                                     Print
                                 </Button>
@@ -636,9 +644,10 @@ export default function ExtraClassesPage() {
                                 <Label>Select Subject</Label>
                                 <Select value={selectedSubject} onValueChange={setSelectedSubject} disabled={loadingSubjects}>
                                     <SelectTrigger className="bg-background">
-                                        <SelectValue placeholder={loadingSubjects ? "Loading subjects..." : "Select a subject to view extra classes..."} />
+                                        <SelectValue placeholder={loadingSubjects ? "Loading subjects..." : "All subjects (show all uploaded)"} />
                                     </SelectTrigger>
                                     <SelectContent>
+                                        <SelectItem value="__ALL__">All subjects (show all uploaded)</SelectItem>
                                         {subjects.map((subj) => (
                                             <SelectItem key={subj.displayName} value={subj.displayName}>
                                                 {subj.displayName}
@@ -650,9 +659,8 @@ export default function ExtraClassesPage() {
                         </div>
                     </div>
 
-                    <DataTable columns={columns} data={filteredData} />
-                </>
-            )}
+            <DataTable columns={columns} data={dataToShow} />
+            </>
 
             <Dialog open={open} onOpenChange={setOpen}>
                 <DialogContent>
@@ -663,7 +671,7 @@ export default function ExtraClassesPage() {
                         <div className="grid gap-2">
                             <Label htmlFor="subject">Subject</Label>
                             <Input id="subject" value={editingItem?.subject || ''} onChange={e => setEditingItem({ ...editingItem, subject: e.target.value })} required />
-                            {selectedSubject && (
+                            {selectedSubject && selectedSubject !== '__ALL__' && (
                                 <p className="text-xs text-muted-foreground">
                                     Current filter: {selectedSubject}
                                 </p>

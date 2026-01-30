@@ -42,6 +42,8 @@ const FALLBACK_DEPARTMENTS: DeptOption[] = [
     { id: '4', name: 'MECH' }, { id: '5', name: 'CIVIL' }, { id: '6', name: 'IT' }, { id: '7', name: 'AUTO' }
 ]
 
+const EXPECTED_CSV_HEADERS = ['subject', 'type', 'proposed_date', 'actual_date', 'date_returned', 'remarks']
+
 export default function AssignmentsPage() {
     const [data, setData] = useState<Assignment[]>([])
     const [loading, setLoading] = useState(true)
@@ -54,7 +56,7 @@ export default function AssignmentsPage() {
 
     // Subject Filter State
     const [subjects, setSubjects] = useState<SubjectItem[]>([])
-    const [selectedSubject, setSelectedSubject] = useState<string>("")
+    const [selectedSubject, setSelectedSubject] = useState<string>("__ALL__")
     const [loadingSubjects, setLoadingSubjects] = useState(false)
 
     // Academic Year and Semester Filter State
@@ -213,9 +215,9 @@ export default function AssignmentsPage() {
             const merged = Array.from(uniqueSubjects.values());
             setSubjects(merged);
 
-            if (selectedSubject) {
+            if (selectedSubject && selectedSubject !== '__ALL__') {
                 const exists = merged.some(s => s.displayName === selectedSubject);
-                if (!exists) setSelectedSubject("");
+                if (!exists) setSelectedSubject('__ALL__');
             }
         } catch (error) {
             console.error("Failed to fetch subjects", error);
@@ -283,6 +285,16 @@ export default function AssignmentsPage() {
                 const { data: { user } } = await supabase.auth.getUser()
                 if (!user) {
                     setImporting(false)
+                    return
+                }
+
+                const fileHeaders = results.meta?.fields ?? (Array.isArray(results.data) && results.data[0] ? Object.keys(results.data[0] as object) : [])
+                const normalized = fileHeaders.map((h: string) => String(h).trim().toLowerCase())
+                const missing = EXPECTED_CSV_HEADERS.filter(h => !normalized.includes(h))
+                if (missing.length > 0) {
+                    alert(`Invalid CSV format. Expected columns: ${EXPECTED_CSV_HEADERS.join(', ')}\n\nMissing: ${missing.join(', ')}\n\nPlease download the sample CSV and use that format.`)
+                    setImporting(false)
+                    if (fileInputRef.current) fileInputRef.current.value = ''
                     return
                 }
 
@@ -376,7 +388,7 @@ export default function AssignmentsPage() {
 
     const downloadSample = () => {
         // Pre-fill subject name if filter is selected
-        const defaultSubject = selectedSubject ? subjects.find(s => s.displayName === selectedSubject)?.name || selectedSubject : "Mathematics";
+        const defaultSubject = (selectedSubject && selectedSubject !== '__ALL__') ? subjects.find(s => s.displayName === selectedSubject)?.name || selectedSubject : "Mathematics";
 
         const csvContent = `id,subject,type,proposed_date,actual_date,date_returned,remarks\n,${defaultSubject},Assignment,2024-02-15,2024-02-15,2024-02-20,Chapter 1\n,Physics,Lab Record,2024-03-10,,,`
         const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
@@ -393,7 +405,7 @@ export default function AssignmentsPage() {
     }
 
     const handleExport = () => {
-        const dataToExport = selectedSubject ? filteredData : data;
+        const dataToExport = dataToShow;
 
         if (dataToExport.length === 0) {
             alert('No data to export');
@@ -417,7 +429,7 @@ export default function AssignmentsPage() {
         if (link.download !== undefined) {
             const url = URL.createObjectURL(blob);
             link.setAttribute('href', url);
-            link.setAttribute('download', `assignments_schedule_${selectedSubject || 'all'}_${format(new Date(), 'yyyyMMdd')}.csv`);
+            link.setAttribute('download', `assignments_schedule_${showAllSubjects ? 'all' : selectedSubject}_${format(new Date(), 'yyyyMMdd')}.csv`);
             link.style.visibility = 'hidden';
             document.body.appendChild(link);
             link.click();
@@ -426,7 +438,7 @@ export default function AssignmentsPage() {
     }
 
     const handlePrint = () => {
-        const dataToPrint = selectedSubject ? filteredData : data;
+        const dataToPrint = dataToShow;
 
         if (dataToPrint.length === 0) {
             alert('No data to print');
@@ -437,7 +449,7 @@ export default function AssignmentsPage() {
         const printWindow = window.open('', '_blank');
         if (!printWindow) return;
 
-        const subjectName = selectedSubject || 'All Subjects';
+        const subjectName = showAllSubjects ? 'All Subjects' : selectedSubject;
         const currentDate = format(new Date(), 'dd/MM/yyyy');
         
         let printContent = `
@@ -566,14 +578,15 @@ export default function AssignmentsPage() {
         }, 250);
     }
 
-    // Filter Logic
-    const filteredData = selectedSubject
+    const showAllSubjects = selectedSubject === '__ALL__'
+    const filteredData = !showAllSubjects && selectedSubject
         ? data.filter(item => {
             const subjObj = subjects.find(s => s.displayName === selectedSubject);
             if (!subjObj) return item.subject === selectedSubject;
             return item.subject === subjObj.name || item.subject === subjObj.code || item.subject === selectedSubject;
         })
-        : [];
+        : []
+    const dataToShow = showAllSubjects ? data : filteredData
 
     const columns: ColumnDef<Assignment>[] = [
         { accessorKey: 'subject', header: 'Subject' },
@@ -620,70 +633,16 @@ export default function AssignmentsPage() {
     ]
 
     const handleAddItem = () => {
-        const subjObj = subjects.find(s => s.displayName === selectedSubject);
-        setEditingItem({
-            subject: subjObj ? subjObj.name : '',
-            type: 'Assignment'
-        });
-        setOpen(true);
+        const subjObj = (selectedSubject && selectedSubject !== '__ALL__') ? subjects.find(s => s.displayName === selectedSubject) : undefined
+        setEditingItem({ subject: subjObj ? subjObj.name : '', type: 'Assignment' })
+        setOpen(true)
     }
 
     if (loading) return <div className="flex justify-center p-8"><Loader2 className="animate-spin" /></div>
 
     return (
         <div className="space-y-6">
-            {!selectedSubject ? (
-                // Show only dropdown when no subject is selected
-                <div className="flex flex-col gap-4">
-                    <h1 className="text-3xl font-bold">Assignments / Lab Records</h1>
-                    <div className="flex items-center gap-4 bg-muted/30 p-4 rounded-lg flex-wrap">
-                        {/* Academic Year Filter */}
-                        <div className="grid gap-2">
-                            <Label>Academic Year</Label>
-                            <Select value={academicYear} onValueChange={setAcademicYear}>
-                                <SelectTrigger className="w-[140px] h-8 bg-background">
-                                    <SelectValue placeholder="Select Year" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="2025-2026">2025-2026</SelectItem>
-                                </SelectContent>
-                            </Select>
-                        </div>
-
-                        {/* Semester Filter */}
-                        <div className="grid gap-2">
-                            <Label>Semester</Label>
-                            <Select value={semesterType} onValueChange={setSemesterType} disabled>
-                                <SelectTrigger className="w-[100px] h-8 bg-background">
-                                    <SelectValue placeholder="Sem Type" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="Even">Even</SelectItem>
-                                </SelectContent>
-                            </Select>
-                        </div>
-
-                        {/* Subject Filter */}
-                        <div className="grid gap-2 w-full max-w-md">
-                            <Label>Select Subject</Label>
-                            <Select value={selectedSubject} onValueChange={setSelectedSubject} disabled={loadingSubjects}>
-                                <SelectTrigger className="bg-background">
-                                    <SelectValue placeholder={loadingSubjects ? "Loading subjects..." : "Select a subject to view assignments..."} />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    {subjects.map((subj) => (
-                                        <SelectItem key={subj.displayName} value={subj.displayName}>
-                                            {subj.displayName}
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                        </div>
-                    </div>
-                </div>
-            ) : (
-                // Show everything when subject is selected
-                <>
+            <>
                     <div className="flex flex-col gap-4">
                         <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
                             <h1 className="text-3xl font-bold">Assignments / Lab Records</h1>
@@ -695,7 +654,7 @@ export default function AssignmentsPage() {
                                     ref={fileInputRef}
                                     onChange={handleImportFileUpload}
                                 />
-                                <Button variant="outline" onClick={handlePrint} title="Print Assignments" disabled={!selectedSubject || (selectedSubject ? filteredData.length === 0 : data.length === 0)}>
+                                <Button variant="outline" onClick={handlePrint} title="Print Assignments" disabled={dataToShow.length === 0}>
                                     <Printer className="w-4 h-4 mr-2" />
                                     Print
                                 </Button>
@@ -750,9 +709,10 @@ export default function AssignmentsPage() {
                                 <Label>Select Subject</Label>
                                 <Select value={selectedSubject} onValueChange={setSelectedSubject} disabled={loadingSubjects}>
                                     <SelectTrigger className="bg-background">
-                                        <SelectValue placeholder={loadingSubjects ? "Loading subjects..." : "Select a subject to view assignments..."} />
+                                        <SelectValue placeholder={loadingSubjects ? "Loading subjects..." : "All subjects (show all uploaded)"} />
                                     </SelectTrigger>
                                     <SelectContent>
+                                        <SelectItem value="__ALL__">All subjects (show all uploaded)</SelectItem>
                                         {subjects.map((subj) => (
                                             <SelectItem key={subj.displayName} value={subj.displayName}>
                                                 {subj.displayName}
@@ -764,9 +724,8 @@ export default function AssignmentsPage() {
                         </div>
                     </div>
 
-                    <DataTable columns={columns} data={filteredData} />
-                </>
-            )}
+            <DataTable columns={columns} data={dataToShow} />
+            </>
 
             <Dialog open={open} onOpenChange={setOpen}>
                 <DialogContent>
@@ -777,7 +736,7 @@ export default function AssignmentsPage() {
                         <div className="grid gap-2">
                             <Label htmlFor="subject">Subject</Label>
                             <Input id="subject" value={editingItem?.subject || ''} onChange={e => setEditingItem({ ...editingItem, subject: e.target.value })} required />
-                            {selectedSubject && (
+                            {selectedSubject && selectedSubject !== '__ALL__' && (
                                 <p className="text-xs text-muted-foreground">
                                     Current filter: {selectedSubject}
                                 </p>

@@ -29,6 +29,7 @@ import Papa from 'papaparse'
 type LecturePlan = {
     id: string
     subject: string
+    section: string | null
     unit_no: number | null
     period_no: number
     proposed_date: string
@@ -51,6 +52,12 @@ const FALLBACK_DEPARTMENTS: DeptOption[] = [
     { id: '4', name: 'MECH' }, { id: '5', name: 'CIVIL' }, { id: '6', name: 'IT' }, { id: '7', name: 'AUTO' }
 ]
 
+// Section options (S1, S2, S3, etc.)
+const SECTION_OPTIONS = ['S1', 'S2', 'S3', 'S4', 'S5', 'S6']
+
+// Expected CSV headers (must match sample file format exactly)
+const EXPECTED_CSV_HEADERS = ['subject', 'section', 'unit_no', 'period_no', 'proposed_date', 'topic', 'actual_completion_date', 'remarks']
+
 export default function LecturePlanPage() {
     const [data, setData] = useState<LecturePlan[]>([])
     const [loading, setLoading] = useState(true)
@@ -62,7 +69,8 @@ export default function LecturePlanPage() {
 
     // Subject Filter State
     const [subjects, setSubjects] = useState<SubjectItem[]>([])
-    const [selectedSubject, setSelectedSubject] = useState<string>("")
+    const [selectedSubject, setSelectedSubject] = useState<string>("__ALL__")
+    const [selectedSection, setSelectedSection] = useState<string>("")
     const [loadingSubjects, setLoadingSubjects] = useState(false)
 
     // Academic Year and Semester Filter State
@@ -237,9 +245,9 @@ export default function LecturePlanPage() {
             }
             setSubjects(merged);
 
-            if (selectedSubject) {
+            if (selectedSubject && selectedSubject !== '__ALL__') {
                 const exists = merged.some(s => s.displayName === selectedSubject);
-                if (!exists) setSelectedSubject("");
+                if (!exists) setSelectedSubject('__ALL__');
             }
         } catch (error) {
             console.error("Failed to fetch subjects", error);
@@ -274,9 +282,12 @@ export default function LecturePlanPage() {
         }
 
         // Only include unit_no if it's provided (not null/undefined)
-        // This prevents errors if the column doesn't exist in the database yet
         if (item.unit_no === null || item.unit_no === undefined || item.unit_no === '') {
             delete item.unit_no
+        }
+        // Normalize section: empty string -> null
+        if (item.section === '' || item.section === undefined) {
+            item.section = null
         }
 
         let error
@@ -332,6 +343,19 @@ export default function LecturePlanPage() {
                     return
                 }
 
+                // Validate CSV headers match sample format exactly
+                const fileHeaders = results.meta?.fields ?? (Array.isArray(results.data) && results.data[0] ? Object.keys(results.data[0] as object) : [])
+                const normalizedFileHeaders = fileHeaders.map((h: string) => String(h).trim().toLowerCase())
+                const missingHeaders = EXPECTED_CSV_HEADERS.filter(h => !normalizedFileHeaders.includes(h))
+                const expectedStr = EXPECTED_CSV_HEADERS.join(', ')
+
+                if (missingHeaders.length > 0) {
+                    alert(`Invalid CSV format. The uploaded file must match the sample file format.\n\nExpected columns:\n${expectedStr}\n\nMissing in your file: ${missingHeaders.join(', ')}\n\nPlease download the sample CSV (click "Sample CSV" button) and use that exact format.`)
+                    setImporting(false)
+                    if (fileInputRef.current) fileInputRef.current.value = ''
+                    return
+                }
+
                 const rows = results.data as any[]
                 const validRows = rows.map(row => {
                     const safeParseDate = (dateStr: string) => {
@@ -358,6 +382,10 @@ export default function LecturePlanPage() {
                         topic: row.topic || row.Topic,
                         actual_completion_date: safeParseDate(row.actual_completion_date || row.ActualDate),
                         remarks: row.remarks || row.Remarks
+                    }
+                    const sectionVal = row.section || row.Section
+                    if (sectionVal !== undefined && sectionVal !== null && String(sectionVal).trim()) {
+                        item.section = String(sectionVal).trim()
                     }
 
                     // Only include unit_no if it's provided in the CSV
@@ -418,9 +446,10 @@ export default function LecturePlanPage() {
 
     const downloadSample = () => {
         // Pre-fill subject name if filter is selected
-        const defaultSubject = selectedSubject ? subjects.find(s => s.displayName === selectedSubject)?.name || selectedSubject : "Mathematics";
+        const defaultSubject = (selectedSubject && selectedSubject !== '__ALL__') ? subjects.find(s => s.displayName === selectedSubject)?.name || selectedSubject : "Mathematics";
+        const defaultSection = selectedSection || "S1";
 
-        const csvContent = `subject,unit_no,period_no,proposed_date,topic,actual_completion_date,remarks\n${defaultSubject},1,1,2024-01-20,Introduction to Calculus,2024-01-20,Completed`
+        const csvContent = `subject,section,unit_no,period_no,proposed_date,topic,actual_completion_date,remarks\n${defaultSubject},${defaultSection},1,1,2024-01-20,Introduction to Calculus,2024-01-20,Completed`
         const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
         const link = document.createElement('a')
         if (link.download !== undefined) {
@@ -435,7 +464,7 @@ export default function LecturePlanPage() {
     }
 
     const handleExport = () => {
-        const dataToExport = selectedSubject ? filteredData : data;
+        const dataToExport = dataToShow;
 
         if (dataToExport.length === 0) {
             alert('No data to export');
@@ -446,6 +475,7 @@ export default function LecturePlanPage() {
         const csvRows = dataToExport.map(item => ({
             id: item.id,
             subject: item.subject,
+            section: item.section || '',
             unit_no: item.unit_no || '',
             period_no: item.period_no,
             proposed_date: item.proposed_date ? format(new Date(item.proposed_date), 'yyyy-MM-dd') : '',
@@ -460,7 +490,7 @@ export default function LecturePlanPage() {
         if (link.download !== undefined) {
             const url = URL.createObjectURL(blob);
             link.setAttribute('href', url);
-            link.setAttribute('download', `lecture_plans_${selectedSubject || 'all'}_${format(new Date(), 'yyyyMMdd')}.csv`);
+            link.setAttribute('download', `lecture_plans_${showAllSubjects ? 'all' : selectedSubject}_${format(new Date(), 'yyyyMMdd')}.csv`);
             link.style.visibility = 'hidden';
             document.body.appendChild(link);
             link.click();
@@ -469,7 +499,7 @@ export default function LecturePlanPage() {
     }
 
     const handlePrint = () => {
-        const dataToPrint = selectedSubject ? filteredData : data;
+        const dataToPrint = dataToShow;
 
         if (dataToPrint.length === 0) {
             alert('No data to print');
@@ -480,14 +510,15 @@ export default function LecturePlanPage() {
         const printWindow = window.open('', '_blank');
         if (!printWindow) return;
 
-        const subjectName = selectedSubject || 'All Subjects';
+        const subjectName = showAllSubjects ? 'All Subjects' : selectedSubject;
+        const sectionLabel = selectedSection ? ` | Section: ${selectedSection}` : '';
         const currentDate = format(new Date(), 'dd/MM/yyyy');
         
         let printContent = `
             <!DOCTYPE html>
             <html>
             <head>
-                <title>Lecture Plan - ${subjectName}</title>
+                <title>Lecture Plan - ${subjectName}${sectionLabel}</title>
                 <style>
                     @media print {
                         @page {
@@ -556,7 +587,7 @@ export default function LecturePlanPage() {
             <body>
                 <div class="header">
                     <h1>LECTURE PLAN</h1>
-                    <p><strong>Subject:</strong> ${subjectName}</p>
+                    <p><strong>Subject:</strong> ${subjectName}${sectionLabel}</p>
                     <p><strong>Academic Year:</strong> ${academicYear} | <strong>Semester:</strong> ${semesterType}</p>
                     <p><strong>Date:</strong> ${currentDate}</p>
                 </div>
@@ -564,6 +595,7 @@ export default function LecturePlanPage() {
                     <thead>
                         <tr>
                             <th style="width: 5%;">S.No</th>
+                            <th style="width: 8%;">Section</th>
                             <th style="width: 8%;">Unit No</th>
                             <th style="width: 8%;">Period</th>
                             <th style="width: 12%;">Proposed Date</th>
@@ -581,10 +613,12 @@ export default function LecturePlanPage() {
             const actualDate = item.actual_completion_date ? format(new Date(item.actual_completion_date), 'dd/MM/yyyy') : '-';
             const status = item.actual_completion_date ? '✓' : '';
             const unitNo = item.unit_no || '-';
+            const section = item.section || '-';
             
             printContent += `
                         <tr>
                             <td style="text-align: center;">${index + 1}</td>
+                            <td style="text-align: center;">${section}</td>
                             <td style="text-align: center;">${unitNo}</td>
                             <td style="text-align: center;">${item.period_no}</td>
                             <td style="text-align: center;">${proposedDate}</td>
@@ -615,21 +649,26 @@ export default function LecturePlanPage() {
         }, 250);
     }
 
-    // Filter data based on selected subject
-    // We try to match loosely by checking if the data subject content is included in our selected Subject Name
-    // or if the subject name is the selected subject.
-    const filteredData = selectedSubject
+    const showAllSubjects = selectedSubject === '__ALL__';
+    // Filter data based on selected subject and section (when subject selected)
+    const filteredData = !showAllSubjects && selectedSubject
         ? data.filter(item => {
-            // Find the full subject object for the selected value
             const subjObj = subjects.find(s => s.displayName === selectedSubject);
-            if (!subjObj) return item.subject === selectedSubject; // Fallback
-
-            // Allow flexibility: if the plan says "Mathematics" and our subject is "SUB101 - Mathematics",
-            // we want to match "Mathematics".
-            // Or if plan says "SUB101", we match "SUB101".
-            return item.subject === subjObj.name || item.subject === subjObj.code || item.subject === selectedSubject;
+            const subjectMatch = !subjObj
+                ? item.subject === selectedSubject
+                : (item.subject === subjObj.name || item.subject === subjObj.code || item.subject === selectedSubject);
+            if (!subjectMatch) return false;
+            if (selectedSection) {
+                const itemSection = item.section || '';
+                return itemSection === selectedSection;
+            }
+            return true;
         })
         : [];
+    // Data to display: all when "__ALL__" (optionally filter by section), filtered when subject selected
+    const dataToShow = showAllSubjects
+        ? (selectedSection ? data.filter(item => (item.section || '') === selectedSection) : data)
+        : filteredData;
 
     const columns: ColumnDef<LecturePlan>[] = [
         {
@@ -643,6 +682,7 @@ export default function LecturePlanPage() {
             )
         },
         { accessorKey: 'subject', header: 'Subject' },
+        { accessorKey: 'section', header: 'Section', cell: ({ row }) => row.original.section || '-' },
         { accessorKey: 'unit_no', header: 'Unit No' },
         { accessorKey: 'period_no', header: 'Period' },
         {
@@ -673,10 +713,10 @@ export default function LecturePlanPage() {
     ]
 
     const handleAddItem = () => {
-        // Pre-fill subject if selected
-        const subjObj = subjects.find(s => s.displayName === selectedSubject);
+        const subjObj = (selectedSubject && selectedSubject !== '__ALL__') ? subjects.find(s => s.displayName === selectedSubject) : undefined;
         setEditingItem({
-            subject: subjObj ? subjObj.name : ''
+            subject: subjObj ? subjObj.name : '',
+            section: selectedSection || null
         });
         setOpen(true);
     }
@@ -685,58 +725,8 @@ export default function LecturePlanPage() {
 
     return (
         <div className="space-y-6">
-            {!selectedSubject ? (
-                // Show only dropdown when no subject is selected
-                <div className="flex flex-col gap-4">
-                    <h1 className="text-3xl font-bold">Lecture Plan</h1>
-                    <div className="flex items-center gap-4 bg-muted/30 p-4 rounded-lg flex-wrap">
-                        {/* Academic Year Filter */}
-                        <div className="grid gap-2">
-                            <Label>Academic Year</Label>
-                            <Select value={academicYear} onValueChange={setAcademicYear}>
-                                <SelectTrigger className="w-[140px] h-8 bg-background">
-                                    <SelectValue placeholder="Select Year" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="2025-2026">2025-2026</SelectItem>
-                                </SelectContent>
-                            </Select>
-                        </div>
-
-                        {/* Semester Filter */}
-                        <div className="grid gap-2">
-                            <Label>Semester</Label>
-                            <Select value={semesterType} onValueChange={setSemesterType} disabled>
-                                <SelectTrigger className="w-[100px] h-8 bg-background">
-                                    <SelectValue placeholder="Sem Type" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="Even">Even</SelectItem>
-                                </SelectContent>
-                            </Select>
-                        </div>
-
-                        {/* Subject Filter */}
-                        <div className="grid gap-2 w-full max-w-md">
-                            <Label>Select Subject</Label>
-                            <Select value={selectedSubject} onValueChange={setSelectedSubject} disabled={loadingSubjects}>
-                                <SelectTrigger className="bg-background">
-                                    <SelectValue placeholder={loadingSubjects ? "Loading subjects..." : "Select a subject to view plan..."} />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    {subjects.map((subj) => (
-                                        <SelectItem key={subj.displayName} value={subj.displayName}>
-                                            {subj.displayName}
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                        </div>
-                    </div>
-                </div>
-            ) : (
-                // Show everything when subject is selected
-                <>
+            {/* Always show filters, buttons, and table (all uploaded files when no subject selected) */}
+            <>
                     <div className="flex flex-col gap-4">
                         <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
                             <h1 className="text-3xl font-bold">Lecture Plan</h1>
@@ -748,7 +738,7 @@ export default function LecturePlanPage() {
                                     ref={fileInputRef}
                                     onChange={handleFileUpload}
                                 />
-                                <Button variant="outline" onClick={handlePrint} title="Print Lecture Plan" disabled={!selectedSubject || (selectedSubject ? filteredData.length === 0 : data.length === 0)}>
+                                <Button variant="outline" onClick={handlePrint} title="Print Lecture Plan" disabled={dataToShow.length === 0}>
                                     <Printer className="w-4 h-4 mr-2" />
                                     Print
                                 </Button>
@@ -801,11 +791,12 @@ export default function LecturePlanPage() {
                             {/* Subject Filter */}
                             <div className="grid gap-2 w-full max-w-md">
                                 <Label>Select Subject</Label>
-                                <Select value={selectedSubject} onValueChange={setSelectedSubject} disabled={loadingSubjects}>
+                                <Select value={selectedSubject} onValueChange={(v) => { setSelectedSubject(v); setSelectedSection(""); }} disabled={loadingSubjects}>
                                     <SelectTrigger className="bg-background">
-                                        <SelectValue placeholder={loadingSubjects ? "Loading subjects..." : "Select a subject to view plan..."} />
+                                        <SelectValue placeholder={loadingSubjects ? "Loading subjects..." : "All subjects (show all uploaded)"} />
                                     </SelectTrigger>
                                     <SelectContent>
+                                        <SelectItem value="__ALL__">All subjects (show all uploaded)</SelectItem>
                                         {subjects.map((subj) => (
                                             <SelectItem key={subj.displayName} value={subj.displayName}>
                                                 {subj.displayName}
@@ -814,12 +805,27 @@ export default function LecturePlanPage() {
                                     </SelectContent>
                                 </Select>
                             </div>
+
+                            {/* Section Filter */}
+                            <div className="grid gap-2">
+                                <Label>Section</Label>
+                                <Select value={selectedSection || "ALL"} onValueChange={(v) => setSelectedSection(v === "ALL" ? "" : v)}>
+                                    <SelectTrigger className="w-[100px] h-8 bg-background">
+                                        <SelectValue placeholder="All" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="ALL">All</SelectItem>
+                                        {SECTION_OPTIONS.map((sec) => (
+                                            <SelectItem key={sec} value={sec}>{sec}</SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                            </div>
                         </div>
                     </div>
 
-                    <DataTable columns={columns} data={filteredData} />
-                </>
-            )}
+            <DataTable columns={columns} data={dataToShow} />
+            </>
 
             <Dialog open={open} onOpenChange={setOpen}>
                 <DialogContent>
@@ -835,12 +841,28 @@ export default function LecturePlanPage() {
                                 onChange={e => setEditingItem({ ...editingItem, subject: e.target.value })}
                                 required
                             />
-                            {/* Helper hint */}
-                            {selectedSubject && (
+                            {selectedSubject && selectedSubject !== '__ALL__' && (
                                 <p className="text-xs text-muted-foreground">
                                     Current filter: {selectedSubject}
                                 </p>
                             )}
+                        </div>
+                        <div className="grid gap-2">
+                            <Label htmlFor="section">Section</Label>
+                            <Select
+                                value={editingItem?.section || "NONE"}
+                                onValueChange={(v) => setEditingItem({ ...editingItem, section: v === "NONE" ? null : v })}
+                            >
+                                <SelectTrigger>
+                                    <SelectValue placeholder="Select section (optional)" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="NONE">—</SelectItem>
+                                    {SECTION_OPTIONS.map((sec) => (
+                                        <SelectItem key={sec} value={sec}>{sec}</SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
                         </div>
                         <div className="grid grid-cols-3 gap-4">
                             <div className="grid gap-2">
