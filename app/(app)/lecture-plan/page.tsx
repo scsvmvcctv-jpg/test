@@ -52,8 +52,8 @@ const FALLBACK_DEPARTMENTS: DeptOption[] = [
     { id: '4', name: 'MECH' }, { id: '5', name: 'CIVIL' }, { id: '6', name: 'IT' }, { id: '7', name: 'AUTO' }
 ]
 
-// Section options (S1, S2, S3, etc.)
-const SECTION_OPTIONS = ['S1', 'S2', 'S3', 'S4', 'S5', 'S6']
+// Section options (S1 through S10)
+const SECTION_OPTIONS = ['S1', 'S2', 'S3', 'S4', 'S5', 'S6', 'S7', 'S8', 'S9', 'S10']
 
 // Expected CSV headers (must match sample file format exactly)
 const EXPECTED_CSV_HEADERS = ['subject', 'section', 'unit_no', 'period_no', 'proposed_date', 'topic', 'actual_completion_date', 'remarks']
@@ -360,9 +360,22 @@ export default function LecturePlanPage() {
                 const validRows = rows.map(row => {
                     const safeParseDate = (dateStr: string) => {
                         if (!dateStr) return null
+                        const s = String(dateStr).trim()
+
+                        // Handle DD-MMM-YYYY (e.g. 02-MAR-2026)
+                        const dmmYMatch = s.match(/^(\d{1,2})[-/]([A-Za-z]{3})[-/](\d{4})$/i)
+                        if (dmmYMatch) {
+                            const [, day, mon, year] = dmmYMatch
+                            const monthMap: Record<string, number> = { JAN: 0, FEB: 1, MAR: 2, APR: 3, MAY: 4, JUN: 5, JUL: 6, AUG: 7, SEP: 8, OCT: 9, NOV: 10, DEC: 11 }
+                            const month = monthMap[mon.toUpperCase()]
+                            if (month !== undefined) {
+                                const utcDate = new Date(Date.UTC(parseInt(year), month, parseInt(day)))
+                                return utcDate.toISOString()
+                            }
+                        }
 
                         // Handle DD-MM-YYYY or DD/MM/YYYY
-                        const dmYMatch = dateStr.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})/)
+                        const dmYMatch = s.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})/)
                         if (dmYMatch) {
                             const [_, day, month, year] = dmYMatch
                             const utcDate = new Date(Date.UTC(parseInt(year), parseInt(month) - 1, parseInt(day)))
@@ -449,7 +462,7 @@ export default function LecturePlanPage() {
         const defaultSubject = (selectedSubject && selectedSubject !== '__ALL__') ? subjects.find(s => s.displayName === selectedSubject)?.name || selectedSubject : "Mathematics";
         const defaultSection = selectedSection || "S1";
 
-        const csvContent = `subject,section,unit_no,period_no,proposed_date,topic,actual_completion_date,remarks\n${defaultSubject},${defaultSection},1,1,2024-01-20,Introduction to Calculus,2024-01-20,Completed`
+        const csvContent = `subject,section,unit_no,period_no,proposed_date,topic,actual_completion_date,remarks\n${defaultSubject},${defaultSection},1,1,02-MAR-2026,Introduction to Calculus,02-MAR-2026,Completed`
         const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
         const link = document.createElement('a')
         if (link.download !== undefined) {
