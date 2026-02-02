@@ -75,8 +75,9 @@ export async function loginAction(prevState: any, formData: FormData) {
         }
 
         if (!response.ok) {
-            console.error('External API failed with error:', data.error);
-            return { error: data.error || 'Invalid UserID or Password (External)' }
+            console.error('External API failed:', response.status, data?.error || data?.details || responseText?.substring(0, 200));
+            const msg = data?.error || data?.details || (response.status === 500 ? 'Authentication service is temporarily unavailable. Please try again later.' : 'Invalid UserID or Password');
+            return { error: msg }
         }
 
         // If Supervisor, return token/data directly (no Supabase sync)
@@ -223,8 +224,9 @@ export async function loginAction(prevState: any, formData: FormData) {
         return { success: true, role: 'Staff' }
 
     } catch (err: any) {
-        console.error('Login error:', err)
-        return { error: `Internal server error: ${err.message}` }
+        console.error('Login error:', err?.message || err, err?.stack)
+        const msg = err?.message || String(err)
+        return { error: msg ? `Login failed: ${msg}` : 'An unexpected error occurred. Please try again.' }
     }
 }
 
