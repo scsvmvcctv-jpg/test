@@ -51,11 +51,9 @@ interface FacultyWorkloadData {
     Subject_Name: string;
     Semester: string | number;
     NoofStudents: number;
-    Theory: number;
+    Theory?: number;
     Lab?: number;
-    LabWorkHours?: number;   // Alternate API field for lab work hours
-    Lab_Hours?: number;
-    LabHours?: number;
+    Practical?: number;  // Alternate API field for lab/practical hours
     Academicyear: string;
     NoofPeriods: number;
 }
@@ -363,14 +361,14 @@ export default function WorkloadPage() {
         return true;
     });
 
-    // Helper to get lab work hours (API may use Lab, LabWorkHours, Lab_Hours, or LabHours)
-    const getLabWorkHours = (item: FacultyWorkloadData): number =>
-        item.LabWorkHours ?? item.Lab_Hours ?? item.LabHours ?? item.Lab ?? 0
+    // Helpers for theory and practical (API may use Theory/Lab or Theory/Practical)
+    const getTheory = (item: FacultyWorkloadData): number => item.Theory ?? 0
+    const getPractical = (item: FacultyWorkloadData): number => item.Practical ?? item.Lab ?? 0
 
     // Calculate totals for footer based on filtered data
     const totalStudents = filteredWorkload.reduce((acc, curr) => acc + (curr.NoofStudents || 0), 0)
-    const totalTheory = filteredWorkload.reduce((acc, curr) => acc + (curr.Theory || 0), 0)
-    const totalLabWorkHours = filteredWorkload.reduce((acc, curr) => acc + getLabWorkHours(curr), 0)
+    const totalTheory = filteredWorkload.reduce((acc, curr) => acc + getTheory(curr), 0)
+    const totalPractical = filteredWorkload.reduce((acc, curr) => acc + getPractical(curr), 0)
     const totalPeriods = filteredWorkload.reduce((acc, curr) => acc + (curr.NoofPeriods || 0), 0)
 
     // Get unique academic years for dropdown
@@ -455,7 +453,7 @@ export default function WorkloadPage() {
                                 <TableHead className="text-center">Semester</TableHead>
                                 <TableHead className="text-center">NoofStudents</TableHead>
                                 <TableHead className="text-center">Theory</TableHead>
-                                <TableHead className="text-center">Lab Work Hours</TableHead>
+                                <TableHead className="text-center">Practical</TableHead>
                                 <TableHead className="text-center">NoofPeriods</TableHead>
                             </TableRow>
                         </TableHeader>
@@ -483,8 +481,8 @@ export default function WorkloadPage() {
                                         <TableCell>{item.Subject_Name}</TableCell>
                                         <TableCell className="text-center">{item.Semester}</TableCell>
                                         <TableCell className="text-center">{item.NoofStudents}</TableCell>
-                                        <TableCell className="text-center">{item.Theory}</TableCell>
-                                        <TableCell className="text-center">{getLabWorkHours(item)}</TableCell>
+                                        <TableCell className="text-center">{getTheory(item)}</TableCell>
+                                        <TableCell className="text-center">{getPractical(item)}</TableCell>
                                         <TableCell className="text-center">{item.NoofPeriods}</TableCell>
                                     </TableRow>
                                 ))
@@ -497,7 +495,7 @@ export default function WorkloadPage() {
                                     <TableCell colSpan={7} className="text-right font-bold">Total</TableCell>
                                     <TableCell className="text-center font-bold">{totalStudents}</TableCell>
                                     <TableCell className="text-center font-bold">{totalTheory}</TableCell>
-                                    <TableCell className="text-center font-bold">{totalLabWorkHours}</TableCell>
+                                    <TableCell className="text-center font-bold">{totalPractical}</TableCell>
                                     <TableCell className="text-center font-bold">{totalPeriods}</TableCell>
                                 </TableRow>
                             </TableHeader>

@@ -30,8 +30,8 @@ export async function GET(req: Request) {
             }, { status: 401 });
         }
 
-        // 4. Proxy Request (send both Dept and DepartmentNo for backend compatibility)
-        const targetUrl = `${API_BASE_URL}/api/facultyworkload?EmpId=${EmpId}&Dept=${Dept}&DepartmentNo=${Dept}`;
+        // 4. Proxy Request
+        const targetUrl = `${API_BASE_URL}/api/facultyworkload?EmpId=${EmpId}&Dept=${Dept}`;
 
         console.log(`Proxying request to: ${targetUrl}`);
 
