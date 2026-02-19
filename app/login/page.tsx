@@ -253,20 +253,12 @@ export default function LoginPage() {
                                 </span>
                             ) : 'Sign In'}
                         </Button>
-                        <div className="flex flex-col gap-1 text-center">
-                            <Link
-                                href="/forgot-password"
-                                className="text-sm text-gray-600 hover:text-indigo-600 transition-colors"
-                            >
-                                Forgot Password?
-                            </Link>
-                            <Link
-                                href="/officer-login"
-                                className="text-sm text-gray-600 hover:text-purple-600 transition-colors"
-                            >
-                                Officer? Sign in here
-                            </Link>
-                        </div>
+                        <Link
+                            href="/officer-login"
+                            className="text-sm text-gray-600 hover:text-purple-600 transition-colors text-center block"
+                        >
+                            Officer? Sign in here
+                        </Link>
                     </CardFooter>
                 </form>
             </Card>
