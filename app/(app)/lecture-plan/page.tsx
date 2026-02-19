@@ -703,7 +703,7 @@ export default function LecturePlanPage() {
     const columns: ColumnDef<LecturePlan>[] = [
         {
             id: 'completed',
-            header: 'Done',
+            header: 'Completed',
             cell: ({ row }) => (
                 <Checkbox
                     checked={!!row.original.actual_completion_date}
