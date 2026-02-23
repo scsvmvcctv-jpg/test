@@ -79,6 +79,8 @@ export default function LecturePlanPage() {
 
     // Store user profile data for refetching
     const [userProfile, setUserProfile] = useState<{ emp_id: string; department_no: string } | null>(null)
+    // Staff info for print (name, department, designation)
+    const [staffPrintInfo, setStaffPrintInfo] = useState<{ staffName: string; department: string; designation: string } | null>(null)
 
     // All departments (for fetching other-dept subjects)
     const [departments, setDepartments] = useState<DeptOption[]>([])
@@ -137,13 +139,20 @@ export default function LecturePlanPage() {
         // Fetch User Profile
         const { data: profile } = await supabase
             .from('profiles')
-            .select('emp_id, department_no')
+            .select('emp_id, department_no, full_name, department_name, designation_name, designation')
             .eq('id', user.id)
             .single()
 
         if (profile?.emp_id && profile?.department_no) {
             setUserProfile({ emp_id: profile.emp_id, department_no: profile.department_no })
             await fetchSubjects(profile.emp_id, profile.department_no, academicYear, semesterType, deptList)
+        }
+        if (profile) {
+            setStaffPrintInfo({
+                staffName: profile.full_name || profile.email || 'Staff',
+                department: profile.department_name || profile.department_no || '-',
+                designation: profile.designation_name || profile.designation || '-'
+            })
         }
 
         // Fetch Lecture Plans
@@ -548,6 +557,10 @@ export default function LecturePlanPage() {
         const subjectName = showAllSubjects ? 'All Subjects' : selectedSubject;
         const sectionLabel = selectedSection ? ` | Section: ${selectedSection}` : '';
         const currentDate = getTodayInAppTz('dd/MM/yyyy');
+        const staffName = staffPrintInfo?.staffName || 'Staff';
+        const department = staffPrintInfo?.department || '-';
+        const designation = staffPrintInfo?.designation || '-';
+        const totalHoursTaken = dataToPrint.length; // total number of periods/entries
         
         let printContent = `
             <!DOCTYPE html>
@@ -590,6 +603,17 @@ export default function LecturePlanPage() {
                         margin: 5px 0;
                         font-size: 12px;
                     }
+                    .staff-info {
+                        text-align: left;
+                        margin-bottom: 15px;
+                        padding: 10px;
+                        background: #f5f5f5;
+                        border-radius: 4px;
+                    }
+                    .staff-info p {
+                        margin: 4px 0;
+                        font-size: 12px;
+                    }
                     table {
                         width: 100%;
                         border-collapse: collapse;
@@ -625,6 +649,12 @@ export default function LecturePlanPage() {
                     <p><strong>Subject:</strong> ${subjectName}${sectionLabel}</p>
                     <p><strong>Academic Year:</strong> ${academicYear} | <strong>Semester:</strong> ${semesterType}</p>
                     <p><strong>Date:</strong> ${currentDate}</p>
+                </div>
+                <div class="staff-info">
+                    <p><strong>Staff Name:</strong> ${staffName}</p>
+                    <p><strong>Department:</strong> ${department}</p>
+                    <p><strong>Designation:</strong> ${designation}</p>
+                    <p><strong>Total number of hours taken:</strong> ${totalHoursTaken}</p>
                 </div>
                 <table>
                     <thead>
