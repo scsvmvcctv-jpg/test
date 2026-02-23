@@ -20,7 +20,7 @@ import {
     SelectTrigger,
     SelectValue,
 } from "@/components/ui/select"
-import { Loader2, Plus, Pencil, Trash2, Upload, Download, FileDown, Printer } from 'lucide-react'
+import { Loader2, Plus, Pencil, Trash2, Upload, Download, FileDown, Printer, ArrowUp, ArrowDown } from 'lucide-react'
 import { fetchFilterOptions } from '@/app/actions/assessment'
 import { ColumnDef } from '@tanstack/react-table'
 import { formatInAppTz, getTodayInAppTz, parseCSVDateToAppTz } from '@/lib/datetime'
@@ -86,6 +86,11 @@ export default function LecturePlanPage() {
     // Multi-select for bulk delete
     const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
     const [deleting, setDeleting] = useState(false)
+
+    // Table search and sort
+    const [tableSearch, setTableSearch] = useState('')
+    const [sortBy, setSortBy] = useState<'proposed_date' | 'topic' | 'period_no' | 'subject' | 'actual_completion_date' | 'section' | 'unit_no' | 'remarks'>('proposed_date')
+    const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc')
 
     useEffect(() => {
         initializeData()
@@ -311,7 +316,7 @@ export default function LecturePlanPage() {
     }
 
     const toggleSelectAll = () => {
-        const ids = dataToShow.map(row => row.id)
+        const ids = tableData.map(row => row.id)
         if (selectedIds.size >= ids.length) {
             setSelectedIds(new Set())
         } else {
@@ -700,7 +705,89 @@ export default function LecturePlanPage() {
         ? (selectedSection ? data.filter(item => (item.section || '') === selectedSection) : data)
         : filteredData;
 
-    const columns: ColumnDef<LecturePlan>[] = [
+    // Table search: filter by subject, section, topic, remarks, dates (case-insensitive)
+    const searchLower = tableSearch.trim().toLowerCase()
+    const dataFilteredBySearch = searchLower
+        ? dataToShow.filter(row => {
+            const subject = (row.subject || '').toLowerCase()
+            const section = (row.section || '').toLowerCase()
+            const topic = (row.topic || '').toLowerCase()
+            const remarks = (row.remarks || '').toLowerCase()
+            const proposed = row.proposed_date ? formatInAppTz(row.proposed_date, 'dd/MM/yyyy').toLowerCase() : ''
+            const actual = row.actual_completion_date ? formatInAppTz(row.actual_completion_date, 'dd/MM/yyyy').toLowerCase() : ''
+            const unitNo = String(row.unit_no ?? '').toLowerCase()
+            const period = String(row.period_no ?? '').toLowerCase()
+            return subject.includes(searchLower) || section.includes(searchLower) || topic.includes(searchLower) ||
+                remarks.includes(searchLower) || proposed.includes(searchLower) || actual.includes(searchLower) ||
+                unitNo.includes(searchLower) || period.includes(searchLower)
+        })
+        : dataToShow;
+
+    // Sort table data
+    const tableData = [...dataFilteredBySearch].sort((a, b) => {
+        let aVal: string | number = ''
+        let bVal: string | number = ''
+        switch (sortBy) {
+            case 'proposed_date':
+                aVal = a.proposed_date || ''
+                bVal = b.proposed_date || ''
+                break
+            case 'actual_completion_date':
+                aVal = a.actual_completion_date || ''
+                bVal = b.actual_completion_date || ''
+                break
+            case 'topic':
+                aVal = (a.topic || '').toLowerCase()
+                bVal = (b.topic || '').toLowerCase()
+                break
+            case 'subject':
+                aVal = (a.subject || '').toLowerCase()
+                bVal = (b.subject || '').toLowerCase()
+                break
+            case 'section':
+                aVal = (a.section || '').toLowerCase()
+                bVal = (b.section || '').toLowerCase()
+                break
+            case 'period_no':
+                aVal = a.period_no
+                bVal = b.period_no
+                break
+            case 'unit_no':
+                aVal = a.unit_no ?? 0
+                bVal = b.unit_no ?? 0
+                break
+            case 'remarks':
+                aVal = (a.remarks || '').toLowerCase()
+                bVal = (b.remarks || '').toLowerCase()
+                break
+            default:
+                aVal = a.proposed_date || ''
+                bVal = b.proposed_date || ''
+        }
+        const cmp = aVal < bVal ? -1 : aVal > bVal ? 1 : 0
+        return sortOrder === 'asc' ? cmp : -cmp
+    })
+
+    // Sortable column header (DataTables-style: click to sort, arrow shows direction)
+    const SortableHeader = ({ columnKey, label }: { columnKey: typeof sortBy; label: string }) => (
+        <Button
+            variant="ghost"
+            className="-ml-3 h-8 w-full justify-start hover:bg-muted/50"
+            onClick={() => {
+                if (sortBy === columnKey) {
+                    setSortOrder(o => o === 'asc' ? 'desc' : 'asc')
+                } else {
+                    setSortBy(columnKey)
+                    setSortOrder('asc')
+                }
+            }}
+        >
+            {label}
+            {sortBy === columnKey ? (sortOrder === 'asc' ? <ArrowUp className="ml-1 h-4 w-4" /> : <ArrowDown className="ml-1 h-4 w-4" />) : <ArrowUp className="ml-1 h-4 w-4 opacity-30" />}
+        </Button>
+    )
+
+    const allColumns: ColumnDef<LecturePlan>[] = [
         {
             id: 'completed',
             header: 'Completed',
@@ -711,22 +798,32 @@ export default function LecturePlanPage() {
                 />
             )
         },
-        { accessorKey: 'subject', header: 'Subject' },
-        { accessorKey: 'section', header: 'Section', cell: ({ row }) => row.original.section || '-' },
-        { accessorKey: 'unit_no', header: 'Unit No' },
-        { accessorKey: 'period_no', header: 'Period' },
+        { accessorKey: 'subject', id: 'subject', header: () => <SortableHeader columnKey="subject" label="Subject" /> },
+        { accessorKey: 'section', id: 'section', header: () => <SortableHeader columnKey="section" label="Section" />, cell: ({ row }) => row.original.section || '-' },
+        { accessorKey: 'unit_no', id: 'unit_no', header: () => <SortableHeader columnKey="unit_no" label="Unit No" /> },
+        { accessorKey: 'period_no', id: 'period_no', header: () => <SortableHeader columnKey="period_no" label="Period" /> },
         {
             accessorKey: 'proposed_date',
-            header: 'Proposed Date',
-            cell: ({ row }) => row.original.proposed_date ? formatInAppTz(row.original.proposed_date, 'dd/MM/yyyy') : '-'
+            id: 'proposed_date',
+            header: () => <SortableHeader columnKey="proposed_date" label="Proposed Date" />,
+            cell: ({ row }) => (
+                <span className="inline-block min-w-[7rem] whitespace-nowrap">
+                    {row.original.proposed_date ? formatInAppTz(row.original.proposed_date, 'dd/MM/yyyy') : '-'}
+                </span>
+            )
         },
-        { accessorKey: 'topic', header: 'Topic' },
+        { accessorKey: 'topic', id: 'topic', header: () => <SortableHeader columnKey="topic" label="Topic" /> },
         {
             accessorKey: 'actual_completion_date',
-            header: 'Actual Date',
-            cell: ({ row }) => row.original.actual_completion_date ? formatInAppTz(row.original.actual_completion_date, 'dd/MM/yyyy') : '-'
+            id: 'actual_completion_date',
+            header: () => <SortableHeader columnKey="actual_completion_date" label="Actual Date" />,
+            cell: ({ row }) => (
+                <span className="inline-block min-w-[7rem] whitespace-nowrap">
+                    {row.original.actual_completion_date ? formatInAppTz(row.original.actual_completion_date, 'dd/MM/yyyy') : '-'}
+                </span>
+            )
         },
-        { accessorKey: 'remarks', header: 'Remarks' },
+        { accessorKey: 'remarks', id: 'remarks', header: () => <SortableHeader columnKey="remarks" label="Remarks" /> },
         {
             id: 'actions',
             cell: ({ row }) => (
@@ -741,7 +838,7 @@ export default function LecturePlanPage() {
             id: 'select',
             header: () => (
                 <Checkbox
-                    checked={dataToShow.length > 0 && selectedIds.size >= dataToShow.length}
+                    checked={tableData.length > 0 && selectedIds.size >= tableData.length}
                     onCheckedChange={toggleSelectAll}
                     aria-label="Select all"
                 />
@@ -755,6 +852,8 @@ export default function LecturePlanPage() {
             )
         }
     ]
+
+    const columns = allColumns
 
     const handleAddItem = () => {
         const subjObj = (selectedSubject && selectedSubject !== '__ALL__') ? subjects.find(s => s.displayName === selectedSubject) : undefined;
@@ -877,7 +976,21 @@ export default function LecturePlanPage() {
                         </div>
                     </div>
 
-            <DataTable columns={columns} data={dataToShow} />
+                    {/* Table search only */}
+                    <div className="flex items-center gap-2 py-2">
+                        <Label htmlFor="table-search" className="text-sm whitespace-nowrap">Search:</Label>
+                        <Input
+                            id="table-search"
+                            placeholder="Search table..."
+                            value={tableSearch}
+                            onChange={(e) => setTableSearch(e.target.value)}
+                            className="h-9 w-48 sm:w-64"
+                        />
+                    </div>
+
+            <div className="w-full min-w-0">
+                <DataTable columns={columns} data={tableData} />
+            </div>
             </>
 
             <Dialog open={open} onOpenChange={setOpen}>

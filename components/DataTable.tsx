@@ -32,8 +32,13 @@ export function DataTable<TData, TValue>({
     })
 
     return (
-        <div className="rounded-md border bg-card">
+        <div className="rounded-md border bg-card w-full max-w-full overflow-x-auto">
             <Table>
+                <colgroup>
+                    {columns.map((_, i) => (
+                        <col key={i} style={{ width: `${100 / columns.length}%` }} />
+                    ))}
+                </colgroup>
                 <TableHeader>
                     {table.getHeaderGroups().map((headerGroup) => (
                         <TableRow key={headerGroup.id}>
