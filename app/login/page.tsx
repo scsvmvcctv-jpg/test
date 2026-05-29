@@ -97,7 +97,10 @@ export default function LoginPage() {
             } else {
                 console.log('Login success, role:', result.role)
                 if (result.role === 'Supervisor') {
-                    // Store admin token and data
+                    if (!result.token) {
+                        setError('Login failed: missing admin token')
+                        return
+                    }
                     localStorage.setItem('adminToken', result.token)
                     localStorage.setItem('adminData', JSON.stringify(result.admin))
                     console.log('Redirecting to /admin')

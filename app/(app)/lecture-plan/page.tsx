@@ -139,7 +139,7 @@ export default function LecturePlanPage() {
         // Fetch User Profile
         const { data: profile } = await supabase
             .from('profiles')
-            .select('emp_id, department_no, full_name, department_name, designation_name, designation')
+            .select('emp_id, department_no, full_name, email, department_name, designation_name, designation')
             .eq('id', user.id)
             .single()
 
