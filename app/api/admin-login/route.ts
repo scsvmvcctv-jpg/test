@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import sql from 'mssql';
-import jwt from 'jsonwebtoken';
+import { signAdminToken } from '@/lib/admin-token';
 
 const dbConfig = {
   user: process.env.DB_USER,
@@ -21,8 +21,50 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Missing credentials or role' }, { status: 400 });
     }
 
-    // Officers: proxy to external auth server (auth2.js /api/admin-login)
-    const isOfficer = /^Officers?$/i.test((UserType as string || '').trim());
+    const userTypeStr = (UserType as string || '').trim();
+    const isOfficer = /^Officers?$/i.test(userTypeStr);
+
+    // Supervisor / HOD: proxy to external auth, then re-sign token for local APIs
+    if (/^Supervisor$/i.test(userTypeStr) || /^HOD$/i.test(userTypeStr)) {
+      const base = (process.env.API_BASE_URL || '').replace(/\/$/, '');
+      if (!base) {
+        return NextResponse.json(
+          { error: 'Admin login requires API_BASE_URL in .env' },
+          { status: 503 }
+        );
+      }
+      const apiUrl = `${base}/api/admin-login`;
+      const body = {
+        UserId: typeof UserId === 'string' ? UserId.trim() : UserId,
+        password,
+        UserType: (UserType as string).trim(),
+      };
+      const res = await fetch(apiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        return NextResponse.json(
+          { error: (data as { error?: string }).error || `External API error (${res.status})` },
+          { status: res.status >= 400 ? res.status : 502 }
+        );
+      }
+      const admin = (data as { admin?: Record<string, unknown> }).admin;
+      const localToken = admin ? signAdminToken(admin) : null;
+      if (!localToken) {
+        return NextResponse.json(
+          { error: 'JWT_SECRET is not configured. Add JWT_SECRET to .env and restart the server.' },
+          { status: 500 }
+        );
+      }
+      return NextResponse.json({
+        ...(data as object),
+        token: localToken,
+      });
+    }
+
     if (isOfficer) {
       const base = (process.env.API_BASE_URL || '').replace(/\/$/, '');
       if (!base) {
@@ -49,12 +91,26 @@ export async function POST(req: Request) {
           { status: res.status >= 400 ? res.status : 502 }
         );
       }
-      return NextResponse.json(data);
+      const admin = (data as { admin?: Record<string, unknown> }).admin
+      const localToken = admin ? signAdminToken(admin) : null
+      if (!localToken) {
+        return NextResponse.json(
+          { error: 'JWT_SECRET is not configured. Add JWT_SECRET to .env and restart the server.' },
+          { status: 500 }
+        );
+      }
+      return NextResponse.json({
+        ...(data as object),
+        token: localToken,
+      });
     }
 
     if (!process.env.JWT_SECRET) {
       console.error('JWT_SECRET is not defined');
-      return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+      return NextResponse.json(
+        { error: 'JWT_SECRET is not configured. Add JWT_SECRET to .env and restart the server.' },
+        { status: 500 }
+      );
     }
 
     await sql.connect(dbConfig);
@@ -70,15 +126,13 @@ export async function POST(req: Request) {
     }
 
     const admin = result.recordset[0];
-
-    const payload = {
-      iat: Math.floor(Date.now() / 1000),
-      exp: Math.floor(Date.now() / 1000) + 3600,
-      role: admin.UserType,
-      data: admin
-    };
-
-    const token = jwt.sign(payload, process.env.JWT_SECRET, { algorithm: 'HS256' });
+    const token = signAdminToken(admin as Record<string, unknown>);
+    if (!token) {
+      return NextResponse.json(
+        { error: 'JWT_SECRET is not configured. Add JWT_SECRET to .env and restart the server.' },
+        { status: 500 }
+      );
+    }
 
     return NextResponse.json({ message: 'Login successful', token, admin });
 

@@ -62,6 +62,7 @@ export default function AdminPage() {
     const [queryDialogOpen, setQueryDialogOpen] = useState(false)
     const [queryId, setQueryId] = useState<string | null>(null)
     const [queryComment, setQueryComment] = useState('')
+    const [approvingInspectionId, setApprovingInspectionId] = useState<string | null>(null)
 
     const supabase = createClient()
     const router = useRouter() // Add router
@@ -214,37 +215,51 @@ export default function AdminPage() {
         setLoading(false)
     }
 
+    const filterByStaff = <T extends { staff_id?: string }>(rows: T[] | null, staffId: string) =>
+        (rows || []).filter((r) => r.staff_id === staffId)
+
     const fetchStaffDetails = async (staffId: string) => {
         setDetailsLoading(true)
         const [
-            { data: lecturePlans },
-            { data: tests },
-            { data: assignments },
-            { data: extraClasses },
-            { data: theory },
-            { data: practical },
-            { data: workload },
-            { data: inspections }
+            { data: lecturePlansAll },
+            { data: testsAll },
+            { data: assignmentsAll },
+            { data: extraClassesAll },
+            { data: theoryAll },
+            { data: practicalAll },
+            { data: workloadAll },
+            { data: inspectionsAll }
         ] = await Promise.all([
-            supabase.rpc('admin_get_lecture_plans').eq('staff_id', staffId).order('proposed_date', { ascending: true }),
-            supabase.rpc('admin_get_tests').eq('staff_id', staffId).order('proposed_test_date', { ascending: true }),
-            supabase.rpc('admin_get_assignments').eq('staff_id', staffId).order('proposed_date', { ascending: true }),
-            supabase.rpc('admin_get_extra_classes').eq('staff_id', staffId).order('date', { ascending: true }),
-            supabase.rpc('admin_get_assessment_theory').eq('staff_id', staffId),
-            supabase.rpc('admin_get_assessment_practical').eq('staff_id', staffId),
-            supabase.rpc('admin_get_workload').eq('staff_id', staffId),
-            supabase.rpc('admin_get_inspections').eq('staff_id', staffId).order('date', { ascending: false })
+            supabase.rpc('admin_get_lecture_plans'),
+            supabase.rpc('admin_get_tests'),
+            supabase.rpc('admin_get_assignments'),
+            supabase.rpc('admin_get_extra_classes'),
+            supabase.rpc('admin_get_assessment_theory'),
+            supabase.rpc('admin_get_assessment_practical'),
+            supabase.rpc('admin_get_workload'),
+            supabase.rpc('admin_get_inspections')
         ])
 
+        const lecturePlans = filterByStaff(lecturePlansAll as { staff_id?: string }[] | null, staffId)
+            .sort((a, b) => String((a as { proposed_date?: string }).proposed_date).localeCompare(String((b as { proposed_date?: string }).proposed_date)))
+        const tests = filterByStaff(testsAll as { staff_id?: string }[] | null, staffId)
+        const assignments = filterByStaff(assignmentsAll as { staff_id?: string }[] | null, staffId)
+        const extraClasses = filterByStaff(extraClassesAll as { staff_id?: string }[] | null, staffId)
+        const theory = filterByStaff(theoryAll as { staff_id?: string }[] | null, staffId)
+        const practical = filterByStaff(practicalAll as { staff_id?: string }[] | null, staffId)
+        const workload = filterByStaff(workloadAll as { staff_id?: string }[] | null, staffId)
+        const inspections = filterByStaff(inspectionsAll as { staff_id?: string }[] | null, staffId)
+            .sort((a, b) => String((b as { date?: string }).date).localeCompare(String((a as { date?: string }).date)))
+
         setStaffDetails({
-            lecturePlans: lecturePlans || [],
-            tests: tests || [],
-            assignments: assignments || [],
-            extraClasses: extraClasses || [],
-            theory: theory || [],
-            practical: practical || [],
-            workload: workload || [],
-            inspections: inspections || []
+            lecturePlans,
+            tests,
+            assignments,
+            extraClasses,
+            theory,
+            practical,
+            workload,
+            inspections
         })
         setDetailsLoading(false)
     }
@@ -252,11 +267,12 @@ export default function AdminPage() {
     const handleApproveInspection = async (id: string, newStatus: string) => {
         if (!confirm(`Are you sure you want to change status to ${newStatus}?`)) return
 
+        setApprovingInspectionId(id)
         try {
             const token = localStorage.getItem('adminToken')
             if (!token) {
                 alert('Admin session expired. Please login again.')
-                router.push('/admin-login')
+                router.push('/login')
                 return
             }
 
@@ -270,7 +286,7 @@ export default function AdminPage() {
             })
 
             const text = await response.text()
-            let data
+            let data: { error?: string; message?: string } = {}
             try {
                 data = JSON.parse(text)
             } catch (e) {
@@ -281,19 +297,25 @@ export default function AdminPage() {
 
             if (!response.ok) {
                 if (response.status === 401) {
-                    alert(`Session expired: ${data.error || 'Unknown error'}. Please login again.`)
+                    alert(`Session expired: ${data.error || 'Please login again.'}`)
                     localStorage.removeItem('adminToken')
                     localStorage.removeItem('adminData')
-                    router.push('/admin-login')
+                    router.push('/login')
                     return
                 }
                 throw new Error(data.error || 'Failed to update status')
             }
 
-            fetchData()
-        } catch (error: any) {
+            alert(`Inspection updated to "${newStatus}" successfully.`)
+            await fetchData()
+            if (selectedStaff) {
+                await fetchStaffDetails(selectedStaff.id)
+            }
+        } catch (error: unknown) {
             console.error('Error updating status:', error)
-            alert(error.message || 'Error updating status')
+            alert(error instanceof Error ? error.message : 'Error updating status')
+        } finally {
+            setApprovingInspectionId(null)
         }
     }
 
@@ -348,10 +370,14 @@ export default function AdminPage() {
             setQueryDialogOpen(false)
             setQueryComment('')
             setQueryId(null)
-            fetchData() // Refresh list
-        } catch (error: any) {
+            alert('Query submitted successfully.')
+            await fetchData()
+            if (selectedStaff) {
+                await fetchStaffDetails(selectedStaff.id)
+            }
+        } catch (error: unknown) {
             console.error('Error submitting query:', error)
-            alert(error.message || 'Error submitting query')
+            alert(error instanceof Error ? error.message : 'Error submitting query')
         }
     }
 
@@ -500,24 +526,54 @@ export default function AdminPage() {
             cell: ({ row }) => {
                 const status = row.original.status
                 if (status === 'Submitted') {
+                    const busy = approvingInspectionId === row.original.id
                     return (
-                        <div className="flex gap-2">
-                            <Button size="sm" onClick={() => handleApproveInspection(row.original.id, 'HOD Approved')} className="bg-blue-600 hover:bg-blue-700 text-white">
-                                <CheckCircle className="w-3 h-3 mr-1" /> HOD Verify
+                        <div className="flex gap-2 flex-wrap">
+                            <Button
+                                type="button"
+                                size="sm"
+                                disabled={!!approvingInspectionId}
+                                onClick={() => handleApproveInspection(row.original.id, 'HOD Approved')}
+                                className="bg-blue-600 hover:bg-blue-700 text-white"
+                            >
+                                {busy ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : <CheckCircle className="w-3 h-3 mr-1" />}
+                                HOD Verify
                             </Button>
-                            <Button size="sm" variant="outline" onClick={() => { setQueryId(row.original.id); setQueryDialogOpen(true); }} className="text-red-600 border-red-200 hover:bg-red-50">
+                            <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                disabled={!!approvingInspectionId}
+                                onClick={() => { setQueryId(row.original.id); setQueryDialogOpen(true); }}
+                                className="text-red-600 border-red-200 hover:bg-red-50"
+                            >
                                 <MessageSquare className="w-3 h-3 mr-1" /> Query
                             </Button>
                         </div>
                     )
                 }
                 if (status === 'HOD Approved') {
+                    const busy = approvingInspectionId === row.original.id
                     return (
-                        <div className="flex gap-2">
-                            <Button size="sm" onClick={() => handleApproveInspection(row.original.id, 'Dean Approved')} className="bg-green-600 hover:bg-green-700 text-white">
-                                <CheckCircle className="w-3 h-3 mr-1" /> Dean Approve
+                        <div className="flex gap-2 flex-wrap">
+                            <Button
+                                type="button"
+                                size="sm"
+                                disabled={!!approvingInspectionId}
+                                onClick={() => handleApproveInspection(row.original.id, 'Dean Approved')}
+                                className="bg-green-600 hover:bg-green-700 text-white"
+                            >
+                                {busy ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : <CheckCircle className="w-3 h-3 mr-1" />}
+                                Dean Approve
                             </Button>
-                            <Button size="sm" variant="outline" onClick={() => { setQueryId(row.original.id); setQueryDialogOpen(true); }} className="text-red-600 border-red-200 hover:bg-red-50">
+                            <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                disabled={!!approvingInspectionId}
+                                onClick={() => { setQueryId(row.original.id); setQueryDialogOpen(true); }}
+                                className="text-red-600 border-red-200 hover:bg-red-50"
+                            >
                                 <MessageSquare className="w-3 h-3 mr-1" /> Query
                             </Button>
                         </div>

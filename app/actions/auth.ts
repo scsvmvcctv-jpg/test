@@ -4,6 +4,7 @@ import { createClient } from '@/lib/supabase/server'
 import { createClient as createSupabaseAdmin } from '@supabase/supabase-js'
 import { cookies } from 'next/headers'
 import { findUserCredentials, sendCredentialsEmail } from '@/lib/auth-service'
+import { signAdminToken } from '@/lib/admin-token'
 
 function getBaseUrl() {
     if (process.env.NEXT_PUBLIC_APP_URL) {
@@ -117,7 +118,12 @@ export async function loginAction(prevState: any, formData: FormData) {
                 console.error('Error logging admin login:', logError)
             }
 
-            return { success: true, token: data.token, admin: data.admin, role: 'Supervisor' }
+            const localToken = signAdminToken(adminData as Record<string, unknown>)
+            if (!localToken) {
+                return { error: 'Server configuration error: JWT_SECRET is missing. Contact administrator.' }
+            }
+
+            return { success: true, token: localToken, admin: data.admin, role: 'Supervisor' }
         }
 
         // --- Staff Logic (Supabase Sync) ---

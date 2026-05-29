@@ -60,3 +60,12 @@ security definer
 as $$
   select * from workload;
 $$;
+
+-- Function to get all inspections
+create or replace function admin_get_inspections()
+returns setof inspections
+language sql
+security definer
+as $$
+  select * from inspections;
+$$;

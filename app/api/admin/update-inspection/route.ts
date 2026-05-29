@@ -23,7 +23,10 @@ export async function POST(req: Request) {
 
         if (!process.env.JWT_SECRET) {
             console.error('JWT_SECRET is not defined');
-            return NextResponse.json({ error: 'Internal configuration error' }, { status: 500 });
+            return NextResponse.json(
+                { error: 'JWT_SECRET is not configured. Add JWT_SECRET to .env and restart the dev server.' },
+                { status: 500 }
+            );
         }
 
         try {
