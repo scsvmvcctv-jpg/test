@@ -21,6 +21,11 @@ import { formatInAppTz } from '@/lib/datetime'
 import { SignatureUploader } from '@/components/SignatureUploader'
 import { Badge } from '@/components/ui/badge'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import {
+    getDeanApprovalDisplay,
+    getHodApprovalDisplay,
+    getStaffInspectionStatusDisplay,
+} from '@/lib/inspection-status'
 
 type Inspection = {
     id: string
@@ -118,19 +123,22 @@ export default function InspectionsPage() {
     }
 
     const getStatusBadge = (status: string) => {
-        switch (status) {
-            case 'Submitted':
-                return <Badge variant="secondary" className="bg-yellow-100 text-yellow-800 hover:bg-yellow-100">Submitted</Badge>
-            case 'HOD Approved':
-                return <Badge variant="secondary" className="bg-blue-100 text-blue-800 hover:bg-blue-100">HOD Approved</Badge>
-            case 'Dean Approved':
-                return <Badge variant="secondary" className="bg-green-100 text-green-800 hover:bg-green-100">Dean Approved</Badge>
-            case 'Returned':
-                return <Badge variant="destructive" className="bg-red-100 text-red-800 hover:bg-red-100">Returned</Badge>
-            default:
-                return <Badge variant="outline">Pending</Badge>
-        }
+        const display = getStaffInspectionStatusDisplay(status)
+        return <Badge className={display.className}>{display.label}</Badge>
     }
+
+    const getApprovalBadge = (display: { label: string; className: string }) => (
+        <Badge className={display.className}>{display.label}</Badge>
+    )
+
+    const renderInitialCell = (signatureUrl: string | null | undefined, display: { label: string; className: string }) => (
+        <div className="flex flex-col gap-1 min-w-[100px]">
+            {getApprovalBadge(display)}
+            {signatureUrl ? (
+                <img src={signatureUrl} alt="Signature" className="h-8 w-auto object-contain" />
+            ) : null}
+        </div>
+    )
 
     const columns: ColumnDef<Inspection>[] = [
         {
@@ -158,13 +166,19 @@ export default function InspectionsPage() {
         },
         {
             accessorKey: 'hod_initial_url',
-            header: 'HOD Initial',
-            cell: ({ row }) => row.original.hod_initial_url ? <img src={row.original.hod_initial_url} alt="HOD" className="h-8" /> : '-'
+            header: 'HOD Status',
+            cell: ({ row }) => renderInitialCell(
+                row.original.hod_initial_url,
+                getHodApprovalDisplay(row.original.status)
+            )
         },
         {
             accessorKey: 'dean_initial_url',
-            header: 'Dean Initial',
-            cell: ({ row }) => row.original.dean_initial_url ? <img src={row.original.dean_initial_url} alt="Dean" className="h-8" /> : '-'
+            header: 'Dean Status',
+            cell: ({ row }) => renderInitialCell(
+                row.original.dean_initial_url,
+                getDeanApprovalDisplay(row.original.status)
+            )
         },
         {
             id: 'actions',

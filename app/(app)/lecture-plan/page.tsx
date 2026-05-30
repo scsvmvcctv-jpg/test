@@ -25,6 +25,8 @@ import { fetchFilterOptions } from '@/app/actions/assessment'
 import { ColumnDef } from '@tanstack/react-table'
 import { formatInAppTz, getTodayInAppTz, parseCSVDateToAppTz } from '@/lib/datetime'
 import Papa from 'papaparse'
+import { useInspectionLock } from '@/hooks/use-inspection-lock'
+import { LogbookLockBanner } from '@/components/LogbookLockBanner'
 
 type LecturePlan = {
     id: string
@@ -66,6 +68,7 @@ export default function LecturePlanPage() {
     const [importing, setImporting] = useState(false)
     const fileInputRef = useRef<HTMLInputElement>(null)
     const supabase = createClient()
+    const { isLocked, lockStatus, blockIfLocked } = useInspectionLock()
 
     // Subject Filter State
     const [subjects, setSubjects] = useState<SubjectItem[]>([])
@@ -271,6 +274,7 @@ export default function LecturePlanPage() {
 
     const handleSave = async (e: React.FormEvent) => {
         e.preventDefault()
+        if (blockIfLocked()) return
         const { data: { user } } = await supabase.auth.getUser()
         if (!user) return
 
@@ -307,6 +311,7 @@ export default function LecturePlanPage() {
     }
 
     const handleDelete = async (id: string) => {
+        if (blockIfLocked()) return
         if (!confirm('Are you sure?')) return
         const { error } = await supabase.from('lecture_plans').delete().eq('id', id)
         if (!error) {
@@ -334,6 +339,7 @@ export default function LecturePlanPage() {
     }
 
     const handleDeleteSelected = async () => {
+        if (blockIfLocked()) return
         if (selectedIds.size === 0) return
         if (!confirm(`Delete ${selectedIds.size} selected row(s)?`)) return
         setDeleting(true)
@@ -349,6 +355,7 @@ export default function LecturePlanPage() {
     }
 
     const toggleCompletion = async (item: LecturePlan, checked: boolean) => {
+        if (blockIfLocked()) return
         const updates = {
             actual_completion_date: checked ? getTodayInAppTz('yyyy-MM-dd') : null,
         }
@@ -364,6 +371,7 @@ export default function LecturePlanPage() {
     }
 
     const handleImportClick = () => {
+        if (blockIfLocked()) return
         if (!selectedSubject || selectedSubject === '__ALL__') {
             alert('Please select a subject from the dropdown before importing CSV.')
             return
@@ -824,6 +832,7 @@ export default function LecturePlanPage() {
             cell: ({ row }) => (
                 <Checkbox
                     checked={!!row.original.actual_completion_date}
+                    disabled={isLocked}
                     onCheckedChange={(checked) => toggleCompletion(row.original, checked as boolean)}
                 />
             )
@@ -858,9 +867,11 @@ export default function LecturePlanPage() {
             id: 'actions',
             cell: ({ row }) => (
                 <div className="flex justify-end gap-2">
-                    <Button variant="ghost" size="icon" onClick={() => { setEditingItem(row.original); setOpen(true); }} title="Edit">
-                        <Pencil className="w-4 h-4" />
-                    </Button>
+                    {!isLocked && (
+                        <Button variant="ghost" size="icon" onClick={() => { setEditingItem(row.original); setOpen(true); }} title="Edit">
+                            <Pencil className="w-4 h-4" />
+                        </Button>
+                    )}
                 </div>
             )
         },
@@ -869,6 +880,7 @@ export default function LecturePlanPage() {
             header: () => (
                 <Checkbox
                     checked={tableData.length > 0 && selectedIds.size >= tableData.length}
+                    disabled={isLocked}
                     onCheckedChange={toggleSelectAll}
                     aria-label="Select all"
                 />
@@ -876,6 +888,7 @@ export default function LecturePlanPage() {
             cell: ({ row }) => (
                 <Checkbox
                     checked={selectedIds.has(row.original.id)}
+                    disabled={isLocked}
                     onCheckedChange={() => toggleSelect(row.original.id)}
                     aria-label="Select row"
                 />
@@ -886,6 +899,7 @@ export default function LecturePlanPage() {
     const columns = allColumns
 
     const handleAddItem = () => {
+        if (blockIfLocked()) return
         const subjObj = (selectedSubject && selectedSubject !== '__ALL__') ? subjects.find(s => s.displayName === selectedSubject) : undefined;
         setEditingItem({
             subject: subjObj ? subjObj.name : '',
@@ -898,6 +912,7 @@ export default function LecturePlanPage() {
 
     return (
         <div className="space-y-6">
+            <LogbookLockBanner isLocked={isLocked} lockStatus={lockStatus} />
             {/* Always show filters, buttons, and table (all uploaded files when no subject selected) */}
             <>
                     <div className="flex flex-col gap-4">
@@ -923,20 +938,20 @@ export default function LecturePlanPage() {
                                     <Download className="w-4 h-4 mr-2" />
                                     Sample CSV
                                 </Button>
-                                <Button variant="outline" onClick={handleImportClick} disabled={importing}>
+                                <Button variant="outline" onClick={handleImportClick} disabled={importing || isLocked}>
                                     {importing ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Upload className="w-4 h-4 mr-2" />}
                                     Import CSV
                                 </Button>
                                 <Button
                                     variant="destructive"
                                     onClick={handleDeleteSelected}
-                                    disabled={selectedIds.size === 0 || deleting}
+                                    disabled={isLocked || selectedIds.size === 0 || deleting}
                                     title="Delete selected rows"
                                 >
                                     {deleting ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Trash2 className="w-4 h-4 mr-2" />}
                                     Delete selected {selectedIds.size > 0 ? `(${selectedIds.size})` : ''}
                                 </Button>
-                                <Button onClick={handleAddItem}>
+                                <Button onClick={handleAddItem} disabled={isLocked}>
                                     <Plus className="w-4 h-4 mr-2" />
                                     Add Entry
                                 </Button>

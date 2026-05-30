@@ -27,6 +27,22 @@ import {
     SelectTrigger,
     SelectValue,
 } from '@/components/ui/select'
+import { InspectionSubmissionReport } from '@/components/admin/InspectionSubmissionReport'
+
+function normalizeDepartmentName(name?: string | null) {
+    return (name || '').replace(/,\s*$/, '').trim()
+}
+
+function isDepartmentScopedAdmin(userType?: string | null) {
+    const type = (userType || '').trim()
+    return /^(supervisor|hod)$/i.test(type)
+}
+
+function getInspectionDisplayStatus(status: string | undefined | null, isHodView: boolean) {
+    const value = status || 'Pending'
+    if (isHodView && value === 'HOD Approved') return 'Pending Dean'
+    return value
+}
 
 type StaffSummary = {
     id: string
@@ -80,6 +96,7 @@ export default function AdminPage() {
     const [adminDetails, setAdminDetails] = useState<any>(null)
     const [departmentList, setDepartmentList] = useState<string[]>([])
     const [selectedDepartment, setSelectedDepartment] = useState<string>('')
+    const [canSelectDepartment, setCanSelectDepartment] = useState(false)
 
     useEffect(() => {
         // Check for admin token
@@ -110,31 +127,48 @@ export default function AdminPage() {
                     currentAdminDetails = {
                         user_id: localAdminData.UserId,
                         dept_mail_id: localAdminData.Deptmailid,
-                        department_name: localAdminData.DepartmentName
+                        department_name: localAdminData.DepartmentName,
+                        user_type: localAdminData.UserType,
                     }
                     setAdminDetails(currentAdminDetails)
                 }
 
-                // 2. Fetch all distinct department names (for dropdown)
-                const { data: profileDepts } = await supabase
-                    .from('profiles')
-                    .select('department_name')
-                const names = (profileDepts || [])
-                    .map((p: { department_name?: string | null }) => (p.department_name || '').replace(/,\s*$/, '').trim())
-                    .filter(Boolean)
-                const unique = [...new Set(names)].sort((a, b) => a.localeCompare(b))
-                setDepartmentList(unique)
+                const userType = currentAdminDetails?.user_type || localAdminData.UserType
+                const adminDept = normalizeDepartmentName(
+                    currentAdminDetails?.department_name || localAdminData.DepartmentName
+                )
+                const deptScoped = isDepartmentScopedAdmin(userType)
+                setCanSelectDepartment(!deptScoped)
 
-                // 3. Default selected department to admin's department if in list, else first or all
-                const adminDept = (currentAdminDetails?.department_name || '').replace(/,\s*$/, '').trim()
-                const defaultDept = unique.includes(adminDept) ? adminDept : (unique[0] || '')
-                setSelectedDepartment(defaultDept)
-
-                // 4. Fetch faculty data for selected department
-                if (defaultDept) {
-                    fetchData(defaultDept)
+                if (deptScoped) {
+                    // HOD / Supervisor: only their own department
+                    const deptList = adminDept ? [adminDept] : []
+                    setDepartmentList(deptList)
+                    setSelectedDepartment(adminDept)
+                    if (adminDept) {
+                        fetchData(adminDept)
+                    } else {
+                        fetchData()
+                    }
                 } else {
-                    fetchData()
+                    // Officers / Admin: all departments in dropdown
+                    const { data: profileDepts } = await supabase
+                        .from('profiles')
+                        .select('department_name')
+                    const names = (profileDepts || [])
+                        .map((p: { department_name?: string | null }) => normalizeDepartmentName(p.department_name))
+                        .filter(Boolean)
+                    const unique = [...new Set(names)].sort((a, b) => a.localeCompare(b))
+                    setDepartmentList(unique)
+
+                    const defaultDept = unique.includes(adminDept) ? adminDept : (unique[0] || '')
+                    setSelectedDepartment(defaultDept)
+
+                    if (defaultDept) {
+                        fetchData(defaultDept)
+                    } else {
+                        fetchData()
+                    }
                 }
             }
         }
@@ -514,6 +548,7 @@ export default function AdminPage() {
             header: 'Status',
             cell: ({ row }) => {
                 const status = row.original.status || 'Pending'
+                const displayStatus = getInspectionDisplayStatus(status, !canSelectDepartment)
                 return (
                     <Badge variant={
                         status === 'Submitted' ? 'secondary' :
@@ -522,11 +557,11 @@ export default function AdminPage() {
                                     status === 'Returned' ? 'destructive' : 'outline'
                     } className={
                         status === 'Submitted' ? 'bg-yellow-100 text-yellow-800' :
-                            status === 'HOD Approved' ? 'bg-blue-100 text-blue-800' :
+                            status === 'HOD Approved' ? 'bg-indigo-100 text-indigo-800' :
                                 status === 'Dean Approved' ? 'bg-green-100 text-green-800' :
                                     status === 'Returned' ? 'bg-red-100 text-red-800' : ''
                     }>
-                        {status}
+                        {displayStatus}
                     </Badge>
                 )
             }
@@ -563,7 +598,7 @@ export default function AdminPage() {
                         </div>
                     )
                 }
-                if (status === 'HOD Approved') {
+                if (status === 'HOD Approved' && canSelectDepartment) {
                     const busy = approvingInspectionId === row.original.id
                     return (
                         <div className="flex gap-2 flex-wrap">
@@ -743,27 +778,36 @@ export default function AdminPage() {
                 <h1 className="text-4xl font-extrabold tracking-tight">Admin Dashboard</h1>
                 <div className="flex items-center gap-2">
                     <Label htmlFor="dept-select" className="text-sm font-medium whitespace-nowrap">Department</Label>
-                    <Select
-                        value={selectedDepartment || '__ALL__'}
-                        onValueChange={(value) => {
-                            const dept = value === '__ALL__' ? '' : value
-                            setSelectedDepartment(dept)
-                            if (dept) fetchData(dept)
-                            else fetchData()
-                        }}
-                    >
-                        <SelectTrigger id="dept-select" className="w-[280px] bg-background">
-                            <SelectValue placeholder="Select department" />
-                        </SelectTrigger>
-                        <SelectContent>
-                            <SelectItem value="__ALL__">All departments</SelectItem>
-                            {departmentList.map((name) => (
-                                <SelectItem key={name} value={name}>
-                                    {name}
-                                </SelectItem>
-                            ))}
-                        </SelectContent>
-                    </Select>
+                    {canSelectDepartment ? (
+                        <Select
+                            value={selectedDepartment || '__ALL__'}
+                            onValueChange={(value) => {
+                                const dept = value === '__ALL__' ? '' : value
+                                setSelectedDepartment(dept)
+                                if (dept) fetchData(dept)
+                                else fetchData()
+                            }}
+                        >
+                            <SelectTrigger id="dept-select" className="w-[280px] bg-background">
+                                <SelectValue placeholder="Select department" />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="__ALL__">All departments</SelectItem>
+                                {departmentList.map((name) => (
+                                    <SelectItem key={name} value={name}>
+                                        {name}
+                                    </SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
+                    ) : (
+                        <div
+                            id="dept-select"
+                            className="min-w-[280px] rounded-md border bg-muted/40 px-3 py-2 text-sm font-medium"
+                        >
+                            {selectedDepartment || normalizeDepartmentName(adminDetails?.department_name) || '—'}
+                        </div>
+                    )}
                 </div>
             </div>
 
@@ -780,6 +824,15 @@ export default function AdminPage() {
                     </CardContent>
                 </Card>
             </div>
+
+            {activityData && (
+                <InspectionSubmissionReport
+                    staffList={data}
+                    inspections={activityData.inspections as { staff_id?: string; date?: string; status?: string | null }[]}
+                    departmentLabel={selectedDepartment || normalizeDepartmentName(adminDetails?.department_name) || 'department'}
+                    isHodView={!canSelectDepartment}
+                />
+            )}
 
             <div className="rounded-md border bg-card text-card-foreground shadow-sm">
                 <DataTable columns={summaryColumns} data={data} />

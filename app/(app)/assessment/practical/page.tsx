@@ -21,6 +21,8 @@ import { getTodayInAppTz } from '@/lib/datetime'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { fetchFilterOptions, fetchStudentData } from '@/app/actions/assessment'
+import { useInspectionLock } from '@/hooks/use-inspection-lock'
+import { LogbookLockBanner } from '@/components/LogbookLockBanner'
 
 type PracticalAssessment = {
     id?: string
@@ -50,6 +52,7 @@ export default function PracticalAssessmentPage() {
     const [importing, setImporting] = useState(false)
     const fileInputRef = useRef<HTMLInputElement>(null)
     const supabase = createClient()
+    const { isLocked, lockStatus, blockIfLocked } = useInspectionLock()
 
     // Subject Filter State
     const [subjects, setSubjects] = useState<SubjectItem[]>([])
@@ -267,6 +270,7 @@ export default function PracticalAssessmentPage() {
 
     const handleSave = async (e: React.FormEvent) => {
         e.preventDefault()
+        if (blockIfLocked()) return
         const { data: { user } } = await supabase.auth.getUser()
         if (!user) return
 
@@ -297,12 +301,14 @@ export default function PracticalAssessmentPage() {
     }
 
     const handleDelete = async (id: string) => {
+        if (blockIfLocked()) return
         if (!confirm('Are you sure?')) return
         const { error } = await supabase.from('assessment_practical').delete().eq('id', id)
         if (!error) reloadData()
     }
 
     const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+        if (blockIfLocked()) return
         const file = event.target.files?.[0]
         if (!file) return
 
@@ -430,18 +436,23 @@ export default function PracticalAssessmentPage() {
             id: 'actions',
             cell: ({ row }) => (
                 <div className="flex justify-end gap-2">
-                    <Button variant="ghost" size="icon" onClick={() => { setEditingItem(row.original); setOpen(true); }}>
-                        <Pencil className="w-4 h-4" />
-                    </Button>
-                    <Button variant="ghost" size="icon" className="text-red-500" onClick={() => row.original.id && handleDelete(row.original.id)}>
-                        <Trash2 className="w-4 h-4" />
-                    </Button>
+                    {!isLocked && (
+                        <>
+                            <Button variant="ghost" size="icon" onClick={() => { setEditingItem(row.original); setOpen(true); }}>
+                                <Pencil className="w-4 h-4" />
+                            </Button>
+                            <Button variant="ghost" size="icon" className="text-red-500" onClick={() => row.original.id && handleDelete(row.original.id)}>
+                                <Trash2 className="w-4 h-4" />
+                            </Button>
+                        </>
+                    )}
                 </div>
             )
         }
     ]
 
     const handleAddItem = () => {
+        if (blockIfLocked()) return
         const subjObj = subjects.find(s => s.displayName === selectedSubject);
         setEditingItem({
             subject: subjObj ? subjObj.name : '',
@@ -523,6 +534,7 @@ export default function PracticalAssessmentPage() {
     }
 
     const handleOpenBulkAssessmentDialog = () => {
+        if (blockIfLocked()) return
         if (!selectedSubject) {
             alert('Please select a subject first')
             return
@@ -593,6 +605,7 @@ export default function PracticalAssessmentPage() {
     }, [selectedSubject, students])
 
     const handleInlineMarkChange = (registrationNo: string, field: 'observations' | 'model_test' | 'record_attendance', value: string) => {
+        if (isLocked) return
         const numValue = value === '' ? undefined : parseFloat(value)
         const clampedValue = numValue !== undefined ? Math.max(0, Math.min(numValue, field === 'record_attendance' ? 10 : 15)) : undefined
         
@@ -606,6 +619,7 @@ export default function PracticalAssessmentPage() {
     }
 
     const handleSaveInlineMarks = async () => {
+        if (blockIfLocked()) return
         if (!selectedSubject) {
             alert('Please select a subject first')
             return
@@ -699,6 +713,7 @@ export default function PracticalAssessmentPage() {
     }
 
     const handleEnterEditMode = () => {
+        if (blockIfLocked()) return
         if (!selectedSubject) {
             alert('Please select a subject first')
             return
@@ -724,6 +739,7 @@ export default function PracticalAssessmentPage() {
     }
 
     const handleSaveBulkAssessment = async () => {
+        if (blockIfLocked()) return
         if (!selectedSubject) {
             alert('Please select a subject')
             return
@@ -812,6 +828,8 @@ export default function PracticalAssessmentPage() {
                 <h1 className="text-3xl font-bold tracking-tight text-gray-900">Assessment Practical</h1>
                 <p className="text-gray-500">Manage student assessments and practical marks.</p>
             </div>
+
+            <LogbookLockBanner isLocked={isLocked} lockStatus={lockStatus} />
 
             {/* Filter Students - same behaviour as Theory: Subject first, then Course/Semester/Mode auto-filled */}
             <Card className="border-t-4 border-t-indigo-500 shadow-md">
@@ -966,7 +984,7 @@ export default function PracticalAssessmentPage() {
                                 )}
 
                                 {/* Select All Button */}
-                                {students.length > 0 && !editMode && (
+                                {students.length > 0 && !editMode && !isLocked && (
                                     <Button
                                         variant="outline"
                                         onClick={handleSelectAll}
@@ -979,7 +997,7 @@ export default function PracticalAssessmentPage() {
                                 )}
 
                                 {/* Edit Marks Button */}
-                                {selectedStudents.size > 0 && selectedSubject && !editMode && (
+                                {selectedStudents.size > 0 && selectedSubject && !editMode && !isLocked && (
                                     <Button
                                         onClick={handleEnterEditMode}
                                         className="bg-blue-600 hover:bg-blue-700"
@@ -1023,7 +1041,7 @@ export default function PracticalAssessmentPage() {
                                 )}
 
                                 {/* Save Assessment Button (Dialog) */}
-                                {selectedStudents.size > 0 && selectedSubject && !editMode && (
+                                {selectedStudents.size > 0 && selectedSubject && !editMode && !isLocked && (
                                     <Button
                                         onClick={handleOpenBulkAssessmentDialog}
                                         className="bg-green-600 hover:bg-green-700"
@@ -1059,7 +1077,7 @@ export default function PracticalAssessmentPage() {
                                                         s => selectedSection === 'ALL' || (s.section || 'Unknown') === selectedSection
                                                     ).length > 0}
                                                     onCheckedChange={handleSelectAll}
-                                                    disabled={editMode}
+                                                    disabled={editMode || isLocked}
                                                 />
                                             </TableHead>
                                             <TableHead className="w-[100px]">Reg No</TableHead>
@@ -1091,7 +1109,7 @@ export default function PracticalAssessmentPage() {
                                                             <Checkbox
                                                                 checked={selectedStudents.has(student.registrationno)}
                                                                 onCheckedChange={() => handleStudentToggle(student.registrationno)}
-                                                                disabled={editMode}
+                                                                disabled={editMode || isLocked}
                                                             />
                                                         </TableCell>
                                                         <TableCell className="font-medium">{student.registrationno}</TableCell>

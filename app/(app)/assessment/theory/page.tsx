@@ -17,6 +17,8 @@ import {
 } from '@/components/ui/dialog'
 import { AlertCircle, Loader2, Search, Save, CheckSquare, Edit2, X } from 'lucide-react'
 import { fetchFilterOptions, fetchStudentData } from '@/app/actions/assessment'
+import { useInspectionLock } from '@/hooks/use-inspection-lock'
+import { LogbookLockBanner } from '@/components/LogbookLockBanner'
 
 type SubjectItem = {
     code: string
@@ -40,6 +42,7 @@ type TheoryAssessment = {
 
 export default function AssessmentTheoryPage() {
     const supabase = createClient()
+    const { isLocked, lockStatus, blockIfLocked } = useInspectionLock()
 
     // Filter State
     const [filterOptions, setFilterOptions] = useState<any>(null)
@@ -399,6 +402,7 @@ export default function AssessmentTheoryPage() {
     }
 
     const handleOpenAssessmentDialog = () => {
+        if (blockIfLocked()) return
         if (!selectedSubject) {
             alert('Please select a subject first')
             return
@@ -418,6 +422,7 @@ export default function AssessmentTheoryPage() {
     }
 
     const handleInlineMarkChange = (registrationNo: string, field: 'internal_1' | 'internal_2' | 'assignment_attendance', value: string) => {
+        if (isLocked) return
         const numValue = value === '' ? undefined : parseFloat(value)
         const clampedValue = numValue !== undefined ? Math.max(0, Math.min(numValue, field === 'assignment_attendance' ? 10 : 15)) : undefined
         
@@ -431,6 +436,7 @@ export default function AssessmentTheoryPage() {
     }
 
     const handleSaveInlineMarks = async () => {
+        if (blockIfLocked()) return
         if (!selectedSubject) {
             alert('Please select a subject first')
             return
@@ -521,6 +527,7 @@ export default function AssessmentTheoryPage() {
     }
 
     const handleEnterEditMode = () => {
+        if (blockIfLocked()) return
         if (!selectedSubject) {
             alert('Please select a subject first')
             return
@@ -546,6 +553,7 @@ export default function AssessmentTheoryPage() {
     }
 
     const handleSaveAssessment = async () => {
+        if (blockIfLocked()) return
         if (!selectedSubject) {
             alert('Please select a subject')
             return
@@ -638,6 +646,8 @@ export default function AssessmentTheoryPage() {
                 <h1 className="text-3xl font-bold tracking-tight text-gray-900">Assessment Theory</h1>
                 <p className="text-gray-500">Manage student assessments and theory marks.</p>
             </div>
+
+            <LogbookLockBanner isLocked={isLocked} lockStatus={lockStatus} />
 
             {/* Authentication Error Display */}
             {authError && (
@@ -787,7 +797,7 @@ export default function AssessmentTheoryPage() {
                                         <Select
                                             value={selectedSection}
                                             onValueChange={setSelectedSection}
-                                            disabled={editMode}
+                                            disabled={editMode || isLocked}
                                         >
                                             <SelectTrigger>
                                                 <SelectValue placeholder="Filter by Section" />
@@ -808,7 +818,7 @@ export default function AssessmentTheoryPage() {
                                 )}
 
                                 {/* Select All Button */}
-                                {students.length > 0 && !editMode && (
+                                {students.length > 0 && !editMode && !isLocked && (
                                     <Button
                                         variant="outline"
                                         onClick={handleSelectAll}
@@ -821,7 +831,7 @@ export default function AssessmentTheoryPage() {
                                 )}
 
                                 {/* Edit Marks Button */}
-                                {selectedStudents.size > 0 && selectedSubject && !editMode && (
+                                {selectedStudents.size > 0 && selectedSubject && !editMode && !isLocked && (
                                     <Button
                                         onClick={handleEnterEditMode}
                                         className="bg-blue-600 hover:bg-blue-700"
@@ -865,7 +875,7 @@ export default function AssessmentTheoryPage() {
                                 )}
 
                                 {/* Save Assessment Button (Dialog) */}
-                                {selectedStudents.size > 0 && selectedSubject && !editMode && (
+                                {selectedStudents.size > 0 && selectedSubject && !editMode && !isLocked && (
                                     <Button
                                         onClick={handleOpenAssessmentDialog}
                                         className="bg-green-600 hover:bg-green-700"
@@ -901,7 +911,7 @@ export default function AssessmentTheoryPage() {
                                                         s => selectedSection === 'ALL' || (s.section || 'Unknown') === selectedSection
                                                     ).length > 0}
                                                     onCheckedChange={handleSelectAll}
-                                                    disabled={editMode}
+                                                    disabled={editMode || isLocked}
                                                 />
                                             </TableHead>
                                             <TableHead className="w-[100px]">Reg No</TableHead>
@@ -939,7 +949,7 @@ export default function AssessmentTheoryPage() {
                                                             <Checkbox
                                                                 checked={selectedStudents.has(student.registrationno)}
                                                                 onCheckedChange={() => handleStudentToggle(student.registrationno)}
-                                                                disabled={editMode}
+                                                                disabled={editMode || isLocked}
                                                             />
                                                         </TableCell>
                                                         <TableCell className="font-medium">{student.registrationno}</TableCell>

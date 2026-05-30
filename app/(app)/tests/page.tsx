@@ -24,6 +24,8 @@ import { fetchFilterOptions } from '@/app/actions/assessment'
 import { ColumnDef } from '@tanstack/react-table'
 import { formatInAppTz, getTodayInAppTz, parseCSVDateToAppTz } from '@/lib/datetime'
 import Papa from 'papaparse'
+import { useInspectionLock } from '@/hooks/use-inspection-lock'
+import { LogbookLockBanner } from '@/components/LogbookLockBanner'
 
 type Test = {
     id: string
@@ -59,6 +61,7 @@ export default function TestsPage() {
     const [importing, setImporting] = useState(false)
     const fileInputRef = useRef<HTMLInputElement>(null)
     const supabase = createClient()
+    const { isLocked, lockStatus, blockIfLocked } = useInspectionLock()
 
     // Subject Filter State
     const [subjects, setSubjects] = useState<SubjectItem[]>([])
@@ -234,6 +237,7 @@ export default function TestsPage() {
 
     const handleSave = async (e: React.FormEvent) => {
         e.preventDefault()
+        if (blockIfLocked()) return
         const { data: { user } } = await supabase.auth.getUser()
         if (!user) return
 
@@ -263,12 +267,14 @@ export default function TestsPage() {
     }
 
     const handleDelete = async (id: string) => {
+        if (blockIfLocked()) return
         if (!confirm('Are you sure?')) return
         const { error } = await supabase.from('tests').delete().eq('id', id)
         if (!error) reloadData()
     }
 
     const handleImportClick = () => {
+        if (blockIfLocked()) return
         if (!selectedSubject || selectedSubject === '__ALL__') {
             alert('Please select a subject from the dropdown before importing CSV.')
             return
@@ -591,18 +597,23 @@ export default function TestsPage() {
             id: 'actions',
             cell: ({ row }) => (
                 <div className="flex justify-end gap-2">
-                    <Button variant="ghost" size="icon" onClick={() => { setEditingItem(row.original); setOpen(true); }}>
-                        <Pencil className="w-4 h-4" />
-                    </Button>
-                    <Button variant="ghost" size="icon" className="text-red-500" onClick={() => handleDelete(row.original.id)}>
-                        <Trash2 className="w-4 h-4" />
-                    </Button>
+                    {!isLocked && (
+                        <>
+                            <Button variant="ghost" size="icon" onClick={() => { setEditingItem(row.original); setOpen(true); }}>
+                                <Pencil className="w-4 h-4" />
+                            </Button>
+                            <Button variant="ghost" size="icon" className="text-red-500" onClick={() => handleDelete(row.original.id)}>
+                                <Trash2 className="w-4 h-4" />
+                            </Button>
+                        </>
+                    )}
                 </div>
             )
         }
     ]
 
     const handleAddItem = () => {
+        if (blockIfLocked()) return
         const subjObj = (selectedSubject && selectedSubject !== '__ALL__') ? subjects.find(s => s.displayName === selectedSubject) : undefined
         setEditingItem({ subject: subjObj ? subjObj.name : '', section: selectedSection || null })
         setOpen(true)
@@ -612,6 +623,7 @@ export default function TestsPage() {
 
     return (
         <div className="space-y-6">
+            <LogbookLockBanner isLocked={isLocked} lockStatus={lockStatus} />
             <>
                     <div className="flex flex-col gap-4">
                         <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
@@ -636,11 +648,11 @@ export default function TestsPage() {
                                     <Download className="w-4 h-4 mr-2" />
                                     Sample CSV
                                 </Button>
-                                <Button variant="outline" onClick={handleImportClick} disabled={importing}>
+                                <Button variant="outline" onClick={handleImportClick} disabled={importing || isLocked}>
                                     {importing ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Upload className="w-4 h-4 mr-2" />}
                                     Import CSV
                                 </Button>
-                                <Button onClick={handleAddItem}>
+                                <Button onClick={handleAddItem} disabled={isLocked}>
                                     <Plus className="w-4 h-4 mr-2" />
                                     Add Entry
                                 </Button>
