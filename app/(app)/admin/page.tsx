@@ -63,6 +63,16 @@ export default function AdminPage() {
     const [queryId, setQueryId] = useState<string | null>(null)
     const [queryComment, setQueryComment] = useState('')
     const [approvingInspectionId, setApprovingInspectionId] = useState<string | null>(null)
+    const [activityData, setActivityData] = useState<{
+        lecturePlans: Record<string, unknown>[]
+        tests: Record<string, unknown>[]
+        assignments: Record<string, unknown>[]
+        extraClasses: Record<string, unknown>[]
+        theory: Record<string, unknown>[]
+        practical: Record<string, unknown>[]
+        workload: Record<string, unknown>[]
+        inspections: Record<string, unknown>[]
+    } | null>(null)
 
     const supabase = createClient()
     const router = useRouter() // Add router
@@ -133,66 +143,35 @@ export default function AdminPage() {
     }, [])
 
     useEffect(() => {
-        if (selectedStaff) {
-            fetchStaffDetails(selectedStaff.id)
+        if (selectedStaff?.id && activityData) {
+            applyStaffDetails(selectedStaff.id)
         }
-    }, [selectedStaff])
+    }, [selectedStaff, activityData])
 
-    const fetchData = async (departmentFilter?: string) => {
-        setLoading(true)
+    const filterByStaff = <T extends { staff_id?: string }>(rows: T[] | null | undefined, staffId: string) =>
+        (rows || []).filter((r) => r.staff_id === staffId)
 
-        let query = supabase
-            .from('profiles')
-            .select('*')
-            .order('full_name', { ascending: true })
-
-        // Apply Department Filter
-        if (departmentFilter) {
-            // Using ilike for case-insensitive matching. 
-            // We strip the trailing comma if present in the filter (e.g. "Computer Science and Engg.,")
-            const cleanFilter = departmentFilter.replace(/,$/, '').trim()
-            query = query.ilike('department_name', `%${cleanFilter}%`)
-        }
-
-        const { data: profiles, error: profilesError } = await query
-
-        if (profilesError || !profiles) {
-            console.error('Error fetching profiles:', profilesError)
-            setLoading(false)
-            return
-        }
-
-        const [
-            { data: lecturePlans },
-            { data: tests },
-            { data: assignments },
-            { data: extraClasses },
-            { data: theoryAssessments },
-            { data: practicalAssessments },
-            { data: workload },
-            { data: inspections }
-        ] = await Promise.all([
-            supabase.rpc('admin_get_lecture_plans'),
-            supabase.rpc('admin_get_tests'),
-            supabase.rpc('admin_get_assignments'),
-            supabase.rpc('admin_get_extra_classes'),
-            supabase.rpc('admin_get_assessment_theory'),
-            supabase.rpc('admin_get_assessment_practical'),
-            supabase.rpc('admin_get_workload'),
-            supabase.rpc('admin_get_inspections')
-        ])
-
-        const summaryData: StaffSummary[] = profiles.map(profile => {
+    const buildStaffSummary = (
+        profiles: { id: string; full_name?: string | null; email?: string | null; department_name?: string | null; department?: string | null; designation_name?: string | null; designation?: string | null }[],
+        lecturePlans: Record<string, unknown>[],
+        tests: Record<string, unknown>[],
+        assignments: Record<string, unknown>[],
+        extraClasses: Record<string, unknown>[],
+        theoryAssessments: Record<string, unknown>[],
+        practicalAssessments: Record<string, unknown>[],
+        workload: Record<string, unknown>[],
+        inspections: Record<string, unknown>[]
+    ): StaffSummary[] =>
+        profiles.map((profile) => {
             const staffId = profile.id
-
-            const staffLecturePlans = lecturePlans?.filter((r: any) => r.staff_id === staffId) || []
-            const staffTests = tests?.filter((r: any) => r.staff_id === staffId) || []
-            const staffAssignments = assignments?.filter((r: any) => r.staff_id === staffId) || []
-            const staffExtraClasses = extraClasses?.filter((r: any) => r.staff_id === staffId) || []
-            const staffTheory = theoryAssessments?.filter((r: any) => r.staff_id === staffId) || []
-            const staffPractical = practicalAssessments?.filter((r: any) => r.staff_id === staffId) || []
-            const staffWorkload = workload?.filter((r: any) => r.staff_id === staffId) || []
-            const staffInspections = inspections?.filter((r: any) => r.staff_id === staffId) || []
+            const staffLecturePlans = filterByStaff(lecturePlans as { staff_id?: string }[], staffId)
+            const staffTests = filterByStaff(tests as { staff_id?: string }[], staffId)
+            const staffAssignments = filterByStaff(assignments as { staff_id?: string }[], staffId)
+            const staffExtraClasses = filterByStaff(extraClasses as { staff_id?: string }[], staffId)
+            const staffTheory = filterByStaff(theoryAssessments as { staff_id?: string }[], staffId)
+            const staffPractical = filterByStaff(practicalAssessments as { staff_id?: string }[], staffId)
+            const staffWorkload = filterByStaff(workload as { staff_id?: string }[], staffId)
+            const staffInspections = filterByStaff(inspections as { staff_id?: string }[], staffId)
 
             return {
                 id: profile.id,
@@ -201,67 +180,105 @@ export default function AdminPage() {
                 department: profile.department_name || profile.department || '-',
                 designation: profile.designation_name || profile.designation || '-',
                 lecture_plans_total: staffLecturePlans.length,
-                lecture_plans_completed: staffLecturePlans.filter((r: any) => r.actual_completion_date).length,
+                lecture_plans_completed: staffLecturePlans.filter((r) => Boolean((r as { actual_completion_date?: string | null }).actual_completion_date)).length,
                 tests_count: staffTests.length,
                 assignments_count: staffAssignments.length,
                 extra_classes_count: staffExtraClasses.length,
                 assessments_count: staffTheory.length + staffPractical.length,
                 workload_count: staffWorkload.length,
-                inspections_count: staffInspections.length
+                inspections_count: staffInspections.length,
             }
         })
 
-        setData(summaryData)
-        setLoading(false)
+    const fetchData = async (departmentFilter?: string) => {
+        setLoading(true)
+
+        const token = localStorage.getItem('adminToken')
+        if (!token) {
+            router.push('/admin-login')
+            setLoading(false)
+            return
+        }
+
+        const params = new URLSearchParams()
+        if (departmentFilter) {
+            params.set('department', departmentFilter)
+        }
+
+        try {
+            const response = await fetch(`/api/admin/dashboard-data?${params.toString()}`, {
+                headers: { Authorization: `Bearer ${token}` },
+            })
+
+            const payload = await response.json()
+            if (!response.ok) {
+                if (response.status === 401) {
+                    alert('Session expired. Please login again.')
+                    localStorage.removeItem('adminToken')
+                    localStorage.removeItem('adminData')
+                    router.push('/login')
+                    return
+                }
+                throw new Error(payload.error || 'Failed to load dashboard data')
+            }
+
+            const {
+                profiles,
+                lecturePlans,
+                tests,
+                assignments,
+                extraClasses,
+                theory,
+                practical,
+                workload,
+                inspections,
+            } = payload
+
+            setActivityData({
+                lecturePlans: lecturePlans || [],
+                tests: tests || [],
+                assignments: assignments || [],
+                extraClasses: extraClasses || [],
+                theory: theory || [],
+                practical: practical || [],
+                workload: workload || [],
+                inspections: inspections || [],
+            })
+
+            setData(
+                buildStaffSummary(
+                    profiles || [],
+                    lecturePlans || [],
+                    tests || [],
+                    assignments || [],
+                    extraClasses || [],
+                    theory || [],
+                    practical || [],
+                    workload || [],
+                    inspections || []
+                )
+            )
+        } catch (error: unknown) {
+            console.error('Error fetching dashboard data:', error)
+            alert(error instanceof Error ? error.message : 'Failed to load dashboard data')
+        } finally {
+            setLoading(false)
+        }
     }
 
-    const filterByStaff = <T extends { staff_id?: string }>(rows: T[] | null, staffId: string) =>
-        (rows || []).filter((r) => r.staff_id === staffId)
-
-    const fetchStaffDetails = async (staffId: string) => {
-        setDetailsLoading(true)
-        const [
-            { data: lecturePlansAll },
-            { data: testsAll },
-            { data: assignmentsAll },
-            { data: extraClassesAll },
-            { data: theoryAll },
-            { data: practicalAll },
-            { data: workloadAll },
-            { data: inspectionsAll }
-        ] = await Promise.all([
-            supabase.rpc('admin_get_lecture_plans'),
-            supabase.rpc('admin_get_tests'),
-            supabase.rpc('admin_get_assignments'),
-            supabase.rpc('admin_get_extra_classes'),
-            supabase.rpc('admin_get_assessment_theory'),
-            supabase.rpc('admin_get_assessment_practical'),
-            supabase.rpc('admin_get_workload'),
-            supabase.rpc('admin_get_inspections')
-        ])
-
-        const lecturePlans = filterByStaff(lecturePlansAll as { staff_id?: string }[] | null, staffId)
-            .sort((a, b) => String((a as { proposed_date?: string }).proposed_date).localeCompare(String((b as { proposed_date?: string }).proposed_date)))
-        const tests = filterByStaff(testsAll as { staff_id?: string }[] | null, staffId)
-        const assignments = filterByStaff(assignmentsAll as { staff_id?: string }[] | null, staffId)
-        const extraClasses = filterByStaff(extraClassesAll as { staff_id?: string }[] | null, staffId)
-        const theory = filterByStaff(theoryAll as { staff_id?: string }[] | null, staffId)
-        const practical = filterByStaff(practicalAll as { staff_id?: string }[] | null, staffId)
-        const workload = filterByStaff(workloadAll as { staff_id?: string }[] | null, staffId)
-        const inspections = filterByStaff(inspectionsAll as { staff_id?: string }[] | null, staffId)
-            .sort((a, b) => String((b as { date?: string }).date).localeCompare(String((a as { date?: string }).date)))
+    const applyStaffDetails = (staffId: string, source = activityData) => {
+        if (!source) return
 
         setStaffDetails({
-            lecturePlans,
-            tests,
-            assignments,
-            extraClasses,
-            theory,
-            practical,
-            workload,
-            inspections
+            lecturePlans: filterByStaff(source.lecturePlans as { staff_id?: string }[], staffId),
+            tests: filterByStaff(source.tests as { staff_id?: string }[], staffId),
+            assignments: filterByStaff(source.assignments as { staff_id?: string }[], staffId),
+            extraClasses: filterByStaff(source.extraClasses as { staff_id?: string }[], staffId),
+            theory: filterByStaff(source.theory as { staff_id?: string }[], staffId),
+            practical: filterByStaff(source.practical as { staff_id?: string }[], staffId),
+            workload: filterByStaff(source.workload as { staff_id?: string }[], staffId),
+            inspections: filterByStaff(source.inspections as { staff_id?: string }[], staffId),
         })
-        setDetailsLoading(false)
     }
 
     const handleApproveInspection = async (id: string, newStatus: string) => {
@@ -307,10 +324,7 @@ export default function AdminPage() {
             }
 
             alert(`Inspection updated to "${newStatus}" successfully.`)
-            await fetchData()
-            if (selectedStaff) {
-                await fetchStaffDetails(selectedStaff.id)
-            }
+            await fetchData(selectedDepartment || undefined)
         } catch (error: unknown) {
             console.error('Error updating status:', error)
             alert(error instanceof Error ? error.message : 'Error updating status')
@@ -371,10 +385,7 @@ export default function AdminPage() {
             setQueryComment('')
             setQueryId(null)
             alert('Query submitted successfully.')
-            await fetchData()
-            if (selectedStaff) {
-                await fetchStaffDetails(selectedStaff.id)
-            }
+            await fetchData(selectedDepartment || undefined)
         } catch (error: unknown) {
             console.error('Error submitting query:', error)
             alert(error instanceof Error ? error.message : 'Error submitting query')
