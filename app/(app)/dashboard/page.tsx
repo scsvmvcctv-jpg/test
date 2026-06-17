@@ -1,9 +1,53 @@
 import { createClient } from '@/lib/supabase/server'
+import {
+    DEFAULT_ACADEMIC_YEAR,
+    DEFAULT_SEMESTER_TYPE,
+    filterWorkloadByPeriod,
+    matchesWorkloadSubject,
+    type WorkloadSubjectRow,
+} from '@/lib/academic-years'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { BookOpen, Calendar, ClipboardList, GraduationCap, Users, Clock, Pencil } from 'lucide-react'
 import Link from 'next/link'
 import { Button } from '@/components/ui/button'
 import { headers } from 'next/headers'
+
+async function fetchFacultyWorkloadRows(
+    empId: string,
+    deptNo: string
+): Promise<WorkloadSubjectRow[]> {
+    try {
+        const headersList = await headers()
+        const host = headersList.get('host') || 'localhost:3000'
+        const protocol = process.env.NODE_ENV === 'production' ? 'https' : 'http'
+        const baseUrl = `${protocol}://${host}`
+
+        const workloadResponse = await fetch(
+            `${baseUrl}/api/faculty-workload?EmpId=${empId}&Dept=${deptNo}`,
+            {
+                headers: {
+                    'Content-Type': 'application/json',
+                    cookie: headersList.get('cookie') || '',
+                },
+                cache: 'no-store',
+            }
+        )
+
+        if (!workloadResponse.ok) return []
+
+        const workloadData = await workloadResponse.json()
+        const rows = Array.isArray(workloadData?.data)
+            ? workloadData.data
+            : Array.isArray(workloadData)
+                ? workloadData
+                : []
+
+        return rows as WorkloadSubjectRow[]
+    } catch (error) {
+        console.error('Error fetching workload:', error)
+        return []
+    }
+}
 
 export default async function DashboardPage() {
     const supabase = await createClient()
@@ -13,92 +57,71 @@ export default async function DashboardPage() {
         return <div>Please log in to view the dashboard.</div>
     }
 
-    // Fetch user profile for emp_id and department_no
+    const academicYear = DEFAULT_ACADEMIC_YEAR
+    const semesterType = DEFAULT_SEMESTER_TYPE
+
     const { data: profile } = await supabase
         .from('profiles')
         .select('emp_id, department_no')
         .eq('id', user.id)
         .single()
 
+    const facultyWorkload = profile?.emp_id && profile?.department_no
+        ? await fetchFacultyWorkloadRows(profile.emp_id, profile.department_no)
+        : []
+
+    const periodWorkload = filterWorkloadByPeriod(facultyWorkload, academicYear, semesterType)
+
+    const totalWorkloadPeriods = periodWorkload.reduce(
+        (acc, curr) => acc + (Number((curr as { NoofPeriods?: number }).NoofPeriods) || 0),
+        0
+    )
+
     const [
-        { count: lecturePlanCount },
-        { count: completedTopicsCount },
-        { count: testsCount },
-        { count: assignmentsCount },
-        { count: extraClassesCount },
-        { count: theoryCount },
-        { count: practicalCount }
+        { data: lecturePlans },
+        { data: tests },
+        { data: assignments },
+        { data: extraClasses },
+        { data: theoryAssessments },
+        { data: practicalAssessments },
     ] = await Promise.all([
-        supabase.from('lecture_plans').select('*', { count: 'exact', head: true }).eq('staff_id', user.id),
-        supabase.from('lecture_plans').select('*', { count: 'exact', head: true }).eq('staff_id', user.id).not('actual_completion_date', 'is', null),
-        supabase.from('tests').select('*', { count: 'exact', head: true }).eq('staff_id', user.id),
-        supabase.from('assignments').select('*', { count: 'exact', head: true }).eq('staff_id', user.id),
-        supabase.from('extra_classes').select('*', { count: 'exact', head: true }).eq('staff_id', user.id),
-        supabase.from('assessment_theory').select('*', { count: 'exact', head: true }).eq('staff_id', user.id),
-        supabase.from('assessment_practical').select('*', { count: 'exact', head: true }).eq('staff_id', user.id)
+        supabase.from('lecture_plans').select('subject, actual_completion_date').eq('staff_id', user.id),
+        supabase.from('tests').select('subject').eq('staff_id', user.id),
+        supabase.from('assignments').select('subject').eq('staff_id', user.id),
+        supabase.from('extra_classes').select('subject').eq('staff_id', user.id),
+        supabase.from('assessment_theory').select('subject').eq('staff_id', user.id),
+        supabase.from('assessment_practical').select('subject').eq('staff_id', user.id),
     ])
 
-    // Calculate workload from faculty workload API
-    let totalWorkloadPeriods = 0
-    if (profile?.emp_id && profile?.department_no) {
-        try {
-            const headersList = await headers()
-            const host = headersList.get('host') || 'localhost:3000'
-            const protocol = process.env.NODE_ENV === 'production' ? 'https' : 'http'
-            const baseUrl = `${protocol}://${host}`
-
-            // Call the faculty workload API (it will use cookies for auth)
-            const workloadResponse = await fetch(
-                `${baseUrl}/api/faculty-workload?EmpId=${profile.emp_id}&Dept=${profile.department_no}`,
-                {
-                    headers: {
-                        'Content-Type': 'application/json',
-                        // Forward cookies for authentication
-                        cookie: headersList.get('cookie') || ''
-                    },
-                    cache: 'no-store'
-                }
-            )
-
-            if (workloadResponse.ok) {
-                const workloadData = await workloadResponse.json()
-                if (workloadData.data && Array.isArray(workloadData.data)) {
-                    // Filter by Academic Year (2025-2026) and Semester Type (Even)
-                    const academicYear = "2025-2026"
-                    const semesterType = "Even"
-                    
-                    const filteredWorkload = workloadData.data.filter((item: any) => {
-                        // Filter by Academic Year
-                        if (academicYear && item.Academicyear !== academicYear) return false;
-                        
-                    // Filter by Semester Type (Even = semesters 2, 4, 6, 8)
-                    const sem = Number(item.Semester);
-                    // semesterType is always "Even" (readonly), so only check for even semesters
-                    if (sem % 2 !== 0) return false; // Exclude odd semesters
-                    
-                    return true;
-                    });
-                    
-                    // Calculate total periods from filtered workload entries
-                    totalWorkloadPeriods = filteredWorkload.reduce((acc: number, curr: any) => {
-                        return acc + (curr.NoofPeriods || 0)
-                    }, 0)
-                }
-            }
-        } catch (error) {
-            console.error('Error fetching workload:', error)
-            // If API call fails, fallback to 0
-            totalWorkloadPeriods = 0
-        }
-    }
+    const filteredLecturePlans = (lecturePlans || []).filter((row) =>
+        matchesWorkloadSubject(row.subject, periodWorkload)
+    )
+    const lecturePlanCount = filteredLecturePlans.length
+    const completedTopicsCount = filteredLecturePlans.filter((row) => row.actual_completion_date).length
+    const testsCount = (tests || []).filter((row) => matchesWorkloadSubject(row.subject, periodWorkload)).length
+    const assignmentsCount = (assignments || []).filter((row) =>
+        matchesWorkloadSubject(row.subject, periodWorkload)
+    ).length
+    const extraClassesCount = (extraClasses || []).filter((row) =>
+        matchesWorkloadSubject(row.subject, periodWorkload)
+    ).length
+    const theoryCount = (theoryAssessments || []).filter((row) =>
+        matchesWorkloadSubject(row.subject, periodWorkload)
+    ).length
+    const practicalCount = (practicalAssessments || []).filter((row) =>
+        matchesWorkloadSubject(row.subject, periodWorkload)
+    ).length
 
     return (
-
         <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50 p-6 -m-6">
             <div className="space-y-8 max-w-7xl mx-auto">
                 <div className="flex flex-col space-y-2">
                     <h1 className="text-4xl font-extrabold tracking-tight text-slate-900">Dashboard</h1>
                     <p className="text-slate-500 text-lg">Overview of your academic activities and progress.</p>
+                    <p className="text-sm font-medium text-slate-600">
+                        Showing data for Academic Year <span className="font-semibold">{academicYear}</span>,{' '}
+                        <span className="font-semibold">{semesterType}</span> semester
+                    </p>
                 </div>
 
                 <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
@@ -114,10 +137,10 @@ export default async function DashboardPage() {
                                 </div>
                             </CardHeader>
                             <CardContent className="relative z-10">
-                                <div className="text-5xl font-extrabold tracking-tight mt-2">{lecturePlanCount || 0}</div>
+                                <div className="text-5xl font-extrabold tracking-tight mt-2">{lecturePlanCount}</div>
                                 <p className="text-sm font-medium text-blue-100 mt-2 flex items-center gap-2">
                                     <span className="w-2 h-2 bg-blue-300 rounded-full animate-pulse" />
-                                    {completedTopicsCount || 0} topics completed
+                                    {completedTopicsCount} topics completed
                                 </p>
                                 <div className="mt-4">
                                     <Button variant="secondary" size="sm" className="w-full bg-white/20 hover:bg-white/30 text-white border-white/30">
@@ -141,7 +164,7 @@ export default async function DashboardPage() {
                                 </div>
                             </CardHeader>
                             <CardContent className="relative z-10">
-                                <div className="text-5xl font-extrabold tracking-tight mt-2">{testsCount || 0}</div>
+                                <div className="text-5xl font-extrabold tracking-tight mt-2">{testsCount}</div>
                                 <p className="text-sm font-medium text-purple-100 mt-2 flex items-center gap-2">
                                     <span className="w-2 h-2 bg-purple-300 rounded-full animate-pulse" />
                                     Upcoming and completed
@@ -168,7 +191,7 @@ export default async function DashboardPage() {
                                 </div>
                             </CardHeader>
                             <CardContent className="relative z-10">
-                                <div className="text-5xl font-extrabold tracking-tight mt-2">{assignmentsCount || 0}</div>
+                                <div className="text-5xl font-extrabold tracking-tight mt-2">{assignmentsCount}</div>
                                 <p className="text-sm font-medium text-orange-100 mt-2 flex items-center gap-2">
                                     <span className="w-2 h-2 bg-orange-300 rounded-full animate-pulse" />
                                     Assignments & Lab Records
@@ -195,7 +218,7 @@ export default async function DashboardPage() {
                                 </div>
                             </CardHeader>
                             <CardContent className="relative z-10">
-                                <div className="text-5xl font-extrabold tracking-tight mt-2">{extraClassesCount || 0}</div>
+                                <div className="text-5xl font-extrabold tracking-tight mt-2">{extraClassesCount}</div>
                                 <p className="text-sm font-medium text-emerald-100 mt-2 flex items-center gap-2">
                                     <span className="w-2 h-2 bg-emerald-300 rounded-full animate-pulse" />
                                     Additional sessions
@@ -222,10 +245,10 @@ export default async function DashboardPage() {
                                 </div>
                             </CardHeader>
                             <CardContent className="relative z-10">
-                                <div className="text-5xl font-extrabold tracking-tight mt-2">{(theoryCount || 0) + (practicalCount || 0)}</div>
+                                <div className="text-5xl font-extrabold tracking-tight mt-2">{theoryCount + practicalCount}</div>
                                 <p className="text-sm font-medium text-indigo-100 mt-2 flex items-center gap-2">
                                     <span className="w-2 h-2 bg-indigo-300 rounded-full animate-pulse" />
-                                    Theory: {theoryCount || 0} | Practical: {practicalCount || 0}
+                                    Theory: {theoryCount} | Practical: {practicalCount}
                                 </p>
                                 <div className="mt-4">
                                     <Button variant="secondary" size="sm" className="w-full bg-white/20 hover:bg-white/30 text-white border-white/30">
@@ -249,10 +272,10 @@ export default async function DashboardPage() {
                                 </div>
                             </CardHeader>
                             <CardContent className="relative z-10">
-                                <div className="text-5xl font-extrabold tracking-tight mt-2">{totalWorkloadPeriods || 0}</div>
+                                <div className="text-5xl font-extrabold tracking-tight mt-2">{totalWorkloadPeriods}</div>
                                 <p className="text-sm font-medium text-cyan-100 mt-2 flex items-center gap-2">
                                     <span className="w-2 h-2 bg-cyan-300 rounded-full animate-pulse" />
-                                    Total periods per week
+                                    Total periods for {academicYear}, {semesterType}
                                 </p>
                                 <div className="mt-4">
                                     <Button variant="secondary" size="sm" className="w-full bg-white/20 hover:bg-white/30 text-white border-white/30">
@@ -267,5 +290,4 @@ export default async function DashboardPage() {
             </div>
         </div>
     )
-
 }

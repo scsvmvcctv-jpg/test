@@ -4,6 +4,7 @@ import { useEffect, useState, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { DataTable } from '@/components/DataTable'
 import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
     Dialog,
@@ -20,10 +21,22 @@ import {
     SelectTrigger,
     SelectValue,
 } from "@/components/ui/select"
-import { Loader2, Plus, Pencil, Trash2, Upload, Download, FileDown, Printer, ArrowUp, ArrowDown } from 'lucide-react'
+import { Loader2, Plus, Pencil, Trash2, Upload, Download, FileDown, Printer, ArrowUp, ArrowDown, Circle } from 'lucide-react'
 import { fetchFilterOptions } from '@/app/actions/assessment'
+import {
+    DEFAULT_ACADEMIC_YEAR,
+    DEFAULT_SEMESTER_TYPE,
+    getAcademicYearOptions,
+    resolveAcademicYear,
+} from '@/lib/academic-years'
 import { ColumnDef } from '@tanstack/react-table'
 import { formatInAppTz, getTodayInAppTz, parseCSVDateToAppTz } from '@/lib/datetime'
+import {
+    getLecturePlanEditState,
+    getMaxActualDate,
+    getSelectableMaxActualDate,
+    validateLecturePlanDates,
+} from '@/lib/lecture-plan-dates'
 import Papa from 'papaparse'
 import { useInspectionLock } from '@/hooks/use-inspection-lock'
 import { LogbookLockBanner } from '@/components/LogbookLockBanner'
@@ -58,7 +71,16 @@ const FALLBACK_DEPARTMENTS: DeptOption[] = [
 const SECTION_OPTIONS = ['S1', 'S2', 'S3', 'S4', 'S5', 'S6', 'S7', 'S8', 'S9', 'S10']
 
 // Expected CSV headers (must match sample file format exactly; subject and section omitted from file)
-const EXPECTED_CSV_HEADERS = ['unit_no', 'period_no', 'proposed_date', 'topic', 'actual_completion_date', 'remarks']
+const EXPECTED_CSV_HEADERS = ['unit_no', 'period_no', 'proposed_date', 'topic', 'remarks']
+
+function toDateInputValue(date: string | null | undefined): string {
+    if (!date) return ''
+    try {
+        return formatInAppTz(date, 'yyyy-MM-dd')
+    } catch {
+        return date.slice(0, 10)
+    }
+}
 
 export default function LecturePlanPage() {
     const [data, setData] = useState<LecturePlan[]>([])
@@ -68,17 +90,19 @@ export default function LecturePlanPage() {
     const [importing, setImporting] = useState(false)
     const fileInputRef = useRef<HTMLInputElement>(null)
     const supabase = createClient()
-    const { isLocked, lockStatus, blockIfLocked } = useInspectionLock()
 
     // Subject Filter State
     const [subjects, setSubjects] = useState<SubjectItem[]>([])
-    const [selectedSubject, setSelectedSubject] = useState<string>("__ALL__")
+    const [selectedSubject, setSelectedSubject] = useState<string>("")
     const [selectedSection, setSelectedSection] = useState<string>("")
     const [loadingSubjects, setLoadingSubjects] = useState(false)
 
     // Academic Year and Semester Filter State
-    const [academicYear, setAcademicYear] = useState<string>("2025-2026")
-    const [semesterType, setSemesterType] = useState<string>("Even")
+    const [academicYear, setAcademicYear] = useState<string>(DEFAULT_ACADEMIC_YEAR)
+    const [academicYearOptions, setAcademicYearOptions] = useState<string[]>([DEFAULT_ACADEMIC_YEAR])
+    const [semesterType, setSemesterType] = useState<string>(DEFAULT_SEMESTER_TYPE)
+    const [filterOptionsData, setFilterOptionsData] = useState<unknown>(null)
+    const { isLocked, lockStatus, blockIfLocked, lockMessage } = useInspectionLock(academicYear, semesterType)
 
     // Store user profile data for refetching
     const [userProfile, setUserProfile] = useState<{ emp_id: string; department_no: string } | null>(null)
@@ -94,7 +118,7 @@ export default function LecturePlanPage() {
 
     // Table search and sort
     const [tableSearch, setTableSearch] = useState('')
-    const [sortBy, setSortBy] = useState<'proposed_date' | 'topic' | 'period_no' | 'subject' | 'actual_completion_date' | 'section' | 'unit_no' | 'remarks'>('proposed_date')
+    const [sortBy, setSortBy] = useState<'proposed_date' | 'topic' | 'period_no' | 'actual_completion_date' | 'unit_no' | 'remarks' | 'status'>('proposed_date')
     const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc')
 
     useEffect(() => {
@@ -106,7 +130,14 @@ export default function LecturePlanPage() {
         const refetchSubjects = async () => {
             if (userProfile?.emp_id && userProfile?.department_no) {
                 setLoadingSubjects(true)
-                await fetchSubjects(userProfile.emp_id, userProfile.department_no, academicYear, semesterType, departments)
+                await fetchSubjects(
+                    userProfile.emp_id,
+                    userProfile.department_no,
+                    academicYear,
+                    semesterType,
+                    departments,
+                    filterOptionsData ?? undefined
+                )
                 setLoadingSubjects(false)
             }
         }
@@ -125,8 +156,14 @@ export default function LecturePlanPage() {
 
         // Fetch departments for "other dept" subjects
         let deptList: DeptOption[] = []
+        let yearForSubjects = academicYear
         const filterResult = await fetchFilterOptions()
         if (filterResult.success && filterResult.data) {
+            setFilterOptionsData(filterResult.data)
+            const years = getAcademicYearOptions(filterResult.data)
+            setAcademicYearOptions(years)
+            yearForSubjects = resolveAcademicYear(years, academicYear)
+            setAcademicYear(yearForSubjects)
             const raw = filterResult.data as any
             const arr = raw.departments ?? raw.Department ?? raw.Dept
             if (Array.isArray(arr) && arr.length) {
@@ -148,7 +185,14 @@ export default function LecturePlanPage() {
 
         if (profile?.emp_id && profile?.department_no) {
             setUserProfile({ emp_id: profile.emp_id, department_no: profile.department_no })
-            await fetchSubjects(profile.emp_id, profile.department_no, academicYear, semesterType, deptList)
+            await fetchSubjects(
+                profile.emp_id,
+                profile.department_no,
+                yearForSubjects,
+                semesterType,
+                deptList,
+                filterResult.success ? filterResult.data : undefined
+            )
         }
         if (profile) {
             setStaffPrintInfo({
@@ -170,7 +214,8 @@ export default function LecturePlanPage() {
         deptId: string,
         filterYear?: string,
         filterSemester?: string,
-        depts: DeptOption[] = []
+        depts: DeptOption[] = [],
+        filterData?: unknown
     ) => {
         try {
             const { data: { session } } = await supabase.auth.getSession();
@@ -195,7 +240,7 @@ export default function LecturePlanPage() {
                         return y === filterYear || (typeof y === 'string' && y.startsWith(yearPrefix));
                     });
                 }
-                if (filterSemester) {
+                if (filterSemester && filterSemester !== 'All') {
                     filtered = filtered.filter((item: any) => {
                         const sem = Number(item.Semester);
                         if (filterSemester === "Odd") return sem % 2 !== 0;
@@ -212,6 +257,20 @@ export default function LecturePlanPage() {
 
             // 1. User's own department workload
             const ownDeptData = await fetchWorkloadForDept(deptId);
+            const workloadByDept = new Map<string, any[]>([[deptId, ownDeptData]]);
+
+            for (const otherId of otherDeptIds) {
+                workloadByDept.set(otherId, await fetchWorkloadForDept(otherId));
+            }
+
+            const allWorkloadRows = Array.from(workloadByDept.values()).flat();
+            const years = getAcademicYearOptions(
+                filterData ?? filterOptionsData,
+                allWorkloadRows.map((item) => item.Academicyear)
+            );
+            setAcademicYearOptions(years);
+            setAcademicYear((current) => resolveAcademicYear(years, current));
+
             const ownFiltered = applyYearSemesterFilter(ownDeptData);
             ownFiltered.forEach((item: any) => {
                 if (!item.SubjectCode || !item.Subject_Name) return;
@@ -228,7 +287,7 @@ export default function LecturePlanPage() {
 
             // 2. Other departments (faculty workload only) – same subject key = no duplicate in dropdown
             for (const otherId of otherDeptIds) {
-                const otherData = await fetchWorkloadForDept(otherId);
+                const otherData = workloadByDept.get(otherId) || [];
                 const otherFiltered = applyYearSemesterFilter(otherData);
                 otherFiltered.forEach((item: any) => {
                     if (!item.SubjectCode || !item.Subject_Name) return;
@@ -247,9 +306,9 @@ export default function LecturePlanPage() {
             const merged = Array.from(uniqueBySubject.values()).sort((a, b) => a.displayName.localeCompare(b.displayName));
             setSubjects(merged);
 
-            if (selectedSubject && selectedSubject !== '__ALL__') {
+            if (selectedSubject) {
                 const exists = merged.some(s => s.displayName === selectedSubject);
-                if (!exists) setSelectedSubject('__ALL__');
+                if (!exists) setSelectedSubject('');
             }
         } catch (error) {
             console.error("Failed to fetch subjects", error);
@@ -278,10 +337,48 @@ export default function LecturePlanPage() {
         const { data: { user } } = await supabase.auth.getUser()
         if (!user) return
 
+        const proposedDate = toDateInputValue(editingItem?.proposed_date)
+        const actualDate = editingItem?.actual_completion_date
+            ? toDateInputValue(editingItem.actual_completion_date)
+            : null
+
+        const dateError = validateLecturePlanDates(proposedDate, actualDate)
+        if (dateError) {
+            alert(dateError)
+            return
+        }
+
+        const saveEditState = getLecturePlanEditState(proposedDate, actualDate)
+        if (actualDate && !saveEditState.canComplete && !editingItem?.actual_completion_date) {
+            alert(saveEditState.lockReason || 'Actual date can only be set during the completion window (proposed date through T+1).')
+            return
+        }
+
+        if (editingItem?.id) {
+            const existing = data.find((row) => row.id === editingItem.id)
+            const existingActual = existing?.actual_completion_date
+                ? toDateInputValue(existing.actual_completion_date)
+                : null
+            const editState = getLecturePlanEditState(
+                toDateInputValue(existing?.proposed_date),
+                existingActual
+            )
+            if (editState.isLocked || !editState.canEdit) {
+                alert(editState.lockReason || 'This entry cannot be edited.')
+                return
+            }
+            if (!editState.canComplete && actualDate) {
+                alert('Actual date can only be set during the completion window (proposed date through T+1).')
+                return
+            }
+        }
+
         // Build item object, only including unit_no if it has a value
         const item: any = {
             ...editingItem,
             staff_id: user.id,
+            proposed_date: proposedDate || null,
+            actual_completion_date: actualDate,
         }
 
         // Only include unit_no if it's provided (not null/undefined)
@@ -356,23 +453,42 @@ export default function LecturePlanPage() {
 
     const toggleCompletion = async (item: LecturePlan, checked: boolean) => {
         if (blockIfLocked()) return
-        const updates = {
-            actual_completion_date: checked ? getTodayInAppTz('yyyy-MM-dd') : null,
+
+        const proposedDate = toDateInputValue(item.proposed_date)
+        const existingActual = item.actual_completion_date
+            ? toDateInputValue(item.actual_completion_date)
+            : null
+        const editState = getLecturePlanEditState(proposedDate, existingActual)
+
+        if (checked) {
+            if (!editState.canComplete) {
+                alert(editState.lockReason || 'Cannot mark as completed yet.')
+                return
+            }
+            const actualDate = getTodayInAppTz('yyyy-MM-dd')
+            const dateError = validateLecturePlanDates(proposedDate, actualDate)
+            if (dateError) {
+                alert(dateError)
+                return
+            }
+            const updates = { actual_completion_date: actualDate }
+            setData(prev => prev.map(p => p.id === item.id ? { ...p, ...updates } : p))
+            const { error } = await supabase.from('lecture_plans').update(updates).eq('id', item.id)
+            if (error) {
+                alert('Error updating status')
+                reloadData()
+            }
+            return
         }
 
-        // Optimistic update
-        setData(prev => prev.map(p => p.id === item.id ? { ...p, ...updates } : p))
-
-        const { error } = await supabase.from('lecture_plans').update(updates).eq('id', item.id)
-        if (error) {
-            alert('Error updating status')
-            reloadData() // Revert on error
+        if (existingActual) {
+            alert('Completed entries cannot be unchecked.')
         }
     }
 
     const handleImportClick = () => {
         if (blockIfLocked()) return
-        if (!selectedSubject || selectedSubject === '__ALL__') {
+        if (!selectedSubject) {
             alert('Please select a subject from the dropdown before importing CSV.')
             return
         }
@@ -387,7 +503,7 @@ export default function LecturePlanPage() {
         const file = event.target.files?.[0]
         if (!file) return
 
-        if (!selectedSubject || selectedSubject === '__ALL__') {
+        if (!selectedSubject) {
             alert('Please select a subject from the dropdown before importing CSV.')
             if (fileInputRef.current) fileInputRef.current.value = ''
             return
@@ -427,10 +543,15 @@ export default function LecturePlanPage() {
                 }
 
                 const rows = results.data as any[]
-                const validRows = rows.map(row => {
+                const invalidDateRows: number[] = []
+                const validRows = rows.map((row, index) => {
                     // Parse dates as calendar dates in Asia/Kolkata so stored date matches CSV (no one-day shift)
                     const proposedDate = parseCSVDateToAppTz(row.proposed_date || row.ProposedDate || '')
-                    const actualDate = parseCSVDateToAppTz(row.actual_completion_date || row.ActualDate || '')
+
+                    if (!proposedDate) {
+                        invalidDateRows.push(index + 2)
+                        return null
+                    }
 
                     // Subject and section come from dropdown selection (required before import)
                     const item: any = {
@@ -438,9 +559,9 @@ export default function LecturePlanPage() {
                         subject: importSubjectName,
                         section: importSection,
                         period_no: parseInt(row.period_no || row.Period || '0'),
-                        proposed_date: proposedDate || null,
+                        proposed_date: proposedDate,
                         topic: row.topic || row.Topic,
-                        actual_completion_date: actualDate || null,
+                        actual_completion_date: null,
                         remarks: row.remarks || row.Remarks
                     }
 
@@ -460,7 +581,13 @@ export default function LecturePlanPage() {
                     }
 
                     return item
-                }).filter(row => row.topic)
+                }).filter((row): row is NonNullable<typeof row> => !!row && !!row.topic)
+
+                if (invalidDateRows.length > 0) {
+                    alert(
+                        `Skipped ${invalidDateRows.length} row(s) with missing or invalid proposed date (rows: ${invalidDateRows.join(', ')}).`
+                    )
+                }
 
                 if (validRows.length > 0) {
                     // Using upsert to handle both inserts and updates
@@ -501,7 +628,7 @@ export default function LecturePlanPage() {
     }
 
     const downloadSample = () => {
-        const csvContent = `unit_no,period_no,proposed_date,topic,actual_completion_date,remarks\n1,1,02-MAR-2026,Introduction to Calculus,02-MAR-2026,Completed`
+        const csvContent = `unit_no,period_no,proposed_date,topic,remarks\n1,1,02-MAR-2026,Introduction to Calculus,As planned`
         const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
         const link = document.createElement('a')
         if (link.download !== undefined) {
@@ -542,7 +669,7 @@ export default function LecturePlanPage() {
         if (link.download !== undefined) {
             const url = URL.createObjectURL(blob);
             link.setAttribute('href', url);
-            link.setAttribute('download', `lecture_plans_${showAllSubjects ? 'all' : selectedSubject}_${getTodayInAppTz('yyyyMMdd')}.csv`);
+            link.setAttribute('download', `lecture_plans_${selectedSubject || 'export'}_${getTodayInAppTz('yyyyMMdd')}.csv`);
             link.style.visibility = 'hidden';
             document.body.appendChild(link);
             link.click();
@@ -562,7 +689,7 @@ export default function LecturePlanPage() {
         const printWindow = window.open('', '_blank');
         if (!printWindow) return;
 
-        const subjectName = showAllSubjects ? 'All Subjects' : selectedSubject;
+        const subjectName = selectedSubject || 'Lecture Plan';
         const sectionLabel = selectedSection ? ` | Section: ${selectedSection}` : '';
         const currentDate = getTodayInAppTz('dd/MM/yyyy');
         const staffName = staffPrintInfo?.staffName || 'Staff';
@@ -722,9 +849,7 @@ export default function LecturePlanPage() {
         }, 250);
     }
 
-    const showAllSubjects = selectedSubject === '__ALL__';
-    // Filter data based on selected subject and section (when subject selected)
-    const filteredData = !showAllSubjects && selectedSubject
+    const dataToShow = selectedSubject
         ? data.filter(item => {
             const subjObj = subjects.find(s => s.displayName === selectedSubject);
             const subjectMatch = !subjObj
@@ -738,10 +863,6 @@ export default function LecturePlanPage() {
             return true;
         })
         : [];
-    // Data to display: all when "__ALL__" (optionally filter by section), filtered when subject selected
-    const dataToShow = showAllSubjects
-        ? (selectedSection ? data.filter(item => (item.section || '') === selectedSection) : data)
-        : filteredData;
 
     // Table search: filter by subject, section, topic, remarks, dates (case-insensitive)
     const searchLower = tableSearch.trim().toLowerCase()
@@ -778,13 +899,9 @@ export default function LecturePlanPage() {
                 aVal = (a.topic || '').toLowerCase()
                 bVal = (b.topic || '').toLowerCase()
                 break
-            case 'subject':
-                aVal = (a.subject || '').toLowerCase()
-                bVal = (b.subject || '').toLowerCase()
-                break
-            case 'section':
-                aVal = (a.section || '').toLowerCase()
-                bVal = (b.section || '').toLowerCase()
+            case 'status':
+                aVal = a.actual_completion_date ? 1 : 0
+                bVal = b.actual_completion_date ? 1 : 0
                 break
             case 'period_no':
                 aVal = a.period_no
@@ -825,20 +942,59 @@ export default function LecturePlanPage() {
         </Button>
     )
 
+    const getRowEditState = (item: LecturePlan) =>
+        getLecturePlanEditState(
+            toDateInputValue(item.proposed_date),
+            item.actual_completion_date ? toDateInputValue(item.actual_completion_date) : null
+        )
+
+    const editingProposedDate = toDateInputValue(editingItem?.proposed_date)
+    const editingActualDate = editingItem?.actual_completion_date
+        ? toDateInputValue(editingItem.actual_completion_date)
+        : null
+    const editingState = getLecturePlanEditState(editingProposedDate, editingActualDate)
+    const editingMaxActualDate = editingProposedDate ? getMaxActualDate(editingProposedDate) : undefined
+    const editingSelectableMaxActualDate = editingProposedDate
+        ? getSelectableMaxActualDate(editingProposedDate)
+        : undefined
+
     const allColumns: ColumnDef<LecturePlan>[] = [
         {
-            id: 'completed',
-            header: 'Completed',
-            cell: ({ row }) => (
-                <Checkbox
-                    checked={!!row.original.actual_completion_date}
-                    disabled={isLocked}
-                    onCheckedChange={(checked) => toggleCompletion(row.original, checked as boolean)}
-                />
-            )
+            id: 'status',
+            header: () => <SortableHeader columnKey="status" label="Status" />,
+            cell: ({ row }) => {
+                const editState = getRowEditState(row.original)
+                const isCompleted = !!row.original.actual_completion_date
+                const disabled = isLocked || isCompleted || !editState.canComplete
+
+                if (isCompleted) {
+                    return (
+                        <Badge className="border-green-200 bg-green-50 text-green-700 hover:bg-green-50">
+                            Completed
+                        </Badge>
+                    )
+                }
+
+                return (
+                    <div className="flex items-center gap-2">
+                        <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-800">
+                            Pending
+                        </Badge>
+                        <Button
+                            type="button"
+                            variant="outline"
+                            size="icon"
+                            disabled={disabled}
+                            onClick={() => toggleCompletion(row.original, true)}
+                            title={editState.lockReason || 'Mark as completed'}
+                            className="h-7 w-7 text-muted-foreground"
+                        >
+                            <Circle className="h-4 w-4" />
+                        </Button>
+                    </div>
+                )
+            }
         },
-        { accessorKey: 'subject', id: 'subject', header: () => <SortableHeader columnKey="subject" label="Subject" /> },
-        { accessorKey: 'section', id: 'section', header: () => <SortableHeader columnKey="section" label="Section" />, cell: ({ row }) => row.original.section || '-' },
         { accessorKey: 'unit_no', id: 'unit_no', header: () => <SortableHeader columnKey="unit_no" label="Unit No" /> },
         { accessorKey: 'period_no', id: 'period_no', header: () => <SortableHeader columnKey="period_no" label="Period" /> },
         {
@@ -865,25 +1021,43 @@ export default function LecturePlanPage() {
         { accessorKey: 'remarks', id: 'remarks', header: () => <SortableHeader columnKey="remarks" label="Remarks" /> },
         {
             id: 'actions',
-            cell: ({ row }) => (
-                <div className="flex justify-end gap-2">
-                    {!isLocked && (
-                        <Button variant="ghost" size="icon" onClick={() => { setEditingItem(row.original); setOpen(true); }} title="Edit">
-                            <Pencil className="w-4 h-4" />
-                        </Button>
-                    )}
-                </div>
-            )
+            cell: ({ row }) => {
+                const editState = getRowEditState(row.original)
+                return (
+                    <div className="flex justify-end gap-2">
+                        {!isLocked && editState.canEdit && (
+                            <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => {
+                                    setEditingItem({
+                                        ...row.original,
+                                        proposed_date: toDateInputValue(row.original.proposed_date),
+                                        actual_completion_date: toDateInputValue(row.original.actual_completion_date) || null,
+                                    })
+                                    setOpen(true)
+                                }}
+                                title="Edit"
+                            >
+                                <Pencil className="w-4 h-4" />
+                            </Button>
+                        )}
+                    </div>
+                )
+            }
         },
         {
             id: 'select',
             header: () => (
-                <Checkbox
-                    checked={tableData.length > 0 && selectedIds.size >= tableData.length}
-                    disabled={isLocked}
-                    onCheckedChange={toggleSelectAll}
-                    aria-label="Select all"
-                />
+                <div className="flex items-center gap-2 whitespace-nowrap">
+                    <Checkbox
+                        checked={tableData.length > 0 && selectedIds.size >= tableData.length}
+                        disabled={isLocked}
+                        onCheckedChange={toggleSelectAll}
+                        aria-label="Select all rows"
+                    />
+                    <span className="text-sm font-medium">Select All</span>
+                </div>
             ),
             cell: ({ row }) => (
                 <Checkbox
@@ -900,9 +1074,13 @@ export default function LecturePlanPage() {
 
     const handleAddItem = () => {
         if (blockIfLocked()) return
-        const subjObj = (selectedSubject && selectedSubject !== '__ALL__') ? subjects.find(s => s.displayName === selectedSubject) : undefined;
+        if (!selectedSubject) {
+            alert('Please select a subject from the dropdown before adding an entry.')
+            return
+        }
+        const subjObj = subjects.find(s => s.displayName === selectedSubject);
         setEditingItem({
-            subject: subjObj ? subjObj.name : '',
+            subject: subjObj ? subjObj.name : selectedSubject,
             section: selectedSection || null
         });
         setOpen(true);
@@ -912,7 +1090,13 @@ export default function LecturePlanPage() {
 
     return (
         <div className="space-y-6">
-            <LogbookLockBanner isLocked={isLocked} lockStatus={lockStatus} />
+            <LogbookLockBanner
+                isLocked={isLocked}
+                lockStatus={lockStatus}
+                academicYear={academicYear}
+                semesterType={semesterType}
+                lockMessage={lockMessage}
+            />
             {/* Always show filters, buttons, and table (all uploaded files when no subject selected) */}
             <>
                     <div className="flex flex-col gap-4">
@@ -967,20 +1151,11 @@ export default function LecturePlanPage() {
                                         <SelectValue placeholder="Select Year" />
                                     </SelectTrigger>
                                     <SelectContent>
-                                        <SelectItem value="2025-2026">2025-2026</SelectItem>
-                                    </SelectContent>
-                                </Select>
-                            </div>
-
-                            {/* Semester Filter */}
-                            <div className="grid gap-2">
-                                <Label>Semester</Label>
-                                <Select value={semesterType} onValueChange={setSemesterType} disabled>
-                                    <SelectTrigger className="w-[100px] h-8 bg-background">
-                                        <SelectValue placeholder="Sem Type" />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        <SelectItem value="Even">Even</SelectItem>
+                                        {academicYearOptions.map((year) => (
+                                            <SelectItem key={year} value={year}>
+                                                {year}
+                                            </SelectItem>
+                                        ))}
                                     </SelectContent>
                                 </Select>
                             </div>
@@ -988,17 +1163,35 @@ export default function LecturePlanPage() {
                             {/* Subject Filter */}
                             <div className="grid gap-2 w-full max-w-md">
                                 <Label>Select Subject</Label>
-                                <Select value={selectedSubject} onValueChange={(v) => { setSelectedSubject(v); setSelectedSection(""); }} disabled={loadingSubjects}>
+                                <Select
+                                    value={selectedSubject || undefined}
+                                    onValueChange={(v) => { setSelectedSubject(v); setSelectedSection(""); }}
+                                    disabled={loadingSubjects}
+                                >
                                     <SelectTrigger className="bg-background">
-                                        <SelectValue placeholder={loadingSubjects ? "Loading subjects..." : "All subjects (show all uploaded)"} />
+                                        <SelectValue placeholder={loadingSubjects ? "Loading subjects..." : "Select Subject"} />
                                     </SelectTrigger>
                                     <SelectContent>
-                                        <SelectItem value="__ALL__">All subjects (show all uploaded)</SelectItem>
                                         {subjects.map((subj) => (
                                             <SelectItem key={subj.displayName} value={subj.displayName}>
                                                 {subj.displayName}
                                             </SelectItem>
                                         ))}
+                                    </SelectContent>
+                                </Select>
+                            </div>
+
+                            {/* Semester Filter */}
+                            <div className="grid gap-2">
+                                <Label>Semester</Label>
+                                <Select value={semesterType} onValueChange={setSemesterType}>
+                                    <SelectTrigger className="w-[100px] h-8 bg-background">
+                                        <SelectValue placeholder="Sem Type" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="Odd">Odd</SelectItem>
+                                        <SelectItem value="Even">Even</SelectItem>
+                                        <SelectItem value="All">All</SelectItem>
                                     </SelectContent>
                                 </Select>
                             </div>
@@ -1052,7 +1245,7 @@ export default function LecturePlanPage() {
                                 onChange={e => setEditingItem({ ...editingItem, subject: e.target.value })}
                                 required
                             />
-                            {selectedSubject && selectedSubject !== '__ALL__' && (
+                            {selectedSubject && (
                                 <p className="text-xs text-muted-foreground">
                                     Current filter: {selectedSubject}
                                 </p>
@@ -1096,7 +1289,22 @@ export default function LecturePlanPage() {
                         <div className="grid grid-cols-2 gap-4">
                             <div className="grid gap-2">
                                 <Label htmlFor="actual_completion_date">Actual Date</Label>
-                                <Input id="actual_completion_date" type="date" value={editingItem?.actual_completion_date || ''} onChange={e => setEditingItem({ ...editingItem, actual_completion_date: e.target.value })} />
+                                <Input
+                                    id="actual_completion_date"
+                                    type="date"
+                                    value={editingActualDate || ''}
+                                    min={editingProposedDate || undefined}
+                                    max={editingSelectableMaxActualDate}
+                                    disabled={!editingState.canComplete}
+                                    onChange={e => setEditingItem({ ...editingItem, actual_completion_date: e.target.value })}
+                                />
+                                {editingProposedDate && editingMaxActualDate && (
+                                    <p className="text-xs text-muted-foreground">
+                                        {!editingState.canComplete
+                                            ? editingState.lockReason
+                                            : `Actual date may be the proposed date (${formatInAppTz(editingProposedDate, 'dd/MM/yyyy')}) or T+1 (${formatInAppTz(editingMaxActualDate, 'dd/MM/yyyy')}).`}
+                                    </p>
+                                )}
                             </div>
                         </div>
                         <div className="grid gap-2">

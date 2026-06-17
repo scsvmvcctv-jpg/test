@@ -14,6 +14,24 @@ function toDate(input: DateInput): Date {
 }
 
 /**
+ * Compare two YYYY-MM-DD calendar dates in app timezone order.
+ */
+export function compareDateOnly(a: string, b: string): number {
+  if (a === b) return 0
+  return a < b ? -1 : 1
+}
+
+/**
+ * Add days to a YYYY-MM-DD calendar date.
+ */
+export function addDaysToDateOnly(isoDate: string, days: number): string {
+  const [y, m, d] = isoDate.split('-').map(Number)
+  const dt = new Date(Date.UTC(y, m - 1, d))
+  dt.setUTCDate(dt.getUTCDate() + days)
+  return `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, '0')}-${String(dt.getUTCDate()).padStart(2, '0')}`
+}
+
+/**
  * Format a date in Asia/Kolkata for display.
  * Works on both client and server.
  */

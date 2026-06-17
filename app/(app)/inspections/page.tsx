@@ -26,6 +26,14 @@ import {
     getHodApprovalDisplay,
     getStaffInspectionStatusDisplay,
 } from '@/lib/inspection-status'
+import { fetchFilterOptions } from '@/app/actions/assessment'
+import {
+    DEFAULT_ACADEMIC_YEAR,
+    DEFAULT_SEMESTER_TYPE,
+    getAcademicYearOptions,
+    resolveAcademicYear,
+} from '@/lib/academic-years'
+import { isLogbookLockedForPeriod } from '@/lib/inspection-lock'
 
 type Inspection = {
     id: string
@@ -37,6 +45,8 @@ type Inspection = {
     dean_initial_url: string
     status: string
     admin_comments?: string
+    academic_year?: string | null
+    semester_type?: string | null
 }
 
 export default function InspectionsPage() {
@@ -44,17 +54,33 @@ export default function InspectionsPage() {
     const [loading, setLoading] = useState(true)
     const [editingItem, setEditingItem] = useState<Partial<Inspection> | null>(null)
     const [open, setOpen] = useState(false)
-    const [submitResult, setSubmitResult] = useState<{ id: string, name: string } | null>(null)
+    const [submitResult, setSubmitResult] = useState<{
+        id: string
+        name: string
+        academicYear: string
+        semesterType: string
+    } | null>(null)
     const [confirmSubmitOpen, setConfirmSubmitOpen] = useState(false)
     const supabase = createClient()
 
-    // Academic Year and Semester Filter State
-    const [academicYear, setAcademicYear] = useState<string>("2025-2026")
-    const [semesterType, setSemesterType] = useState<string>("Even")
+    const [academicYear, setAcademicYear] = useState<string>(DEFAULT_ACADEMIC_YEAR)
+    const [academicYearOptions, setAcademicYearOptions] = useState<string[]>([DEFAULT_ACADEMIC_YEAR])
+    const [semesterType, setSemesterType] = useState<string>(DEFAULT_SEMESTER_TYPE)
 
     useEffect(() => {
-        fetchData()
+        initializePage()
     }, [])
+
+    const initializePage = async () => {
+        setLoading(true)
+        const filterResult = await fetchFilterOptions()
+        if (filterResult.success && filterResult.data) {
+            const years = getAcademicYearOptions(filterResult.data)
+            setAcademicYearOptions(years)
+            setAcademicYear((current) => resolveAcademicYear(years, current))
+        }
+        await fetchData()
+    }
 
     const fetchData = async () => {
         setLoading(true)
@@ -67,7 +93,17 @@ export default function InspectionsPage() {
             .eq('staff_id', user.id)
             .order('date', { ascending: false })
 
-        if (data) setData(data)
+        if (data) {
+            setData(data)
+            const years = getAcademicYearOptions(
+                null,
+                data.map((row) => row.academic_year).filter(Boolean) as string[]
+            )
+            setAcademicYearOptions((prev) => {
+                const merged = [...new Set([...prev, ...years])].sort((a, b) => b.localeCompare(a))
+                return merged.length ? merged : prev
+            })
+        }
         setLoading(false)
     }
 
@@ -79,6 +115,8 @@ export default function InspectionsPage() {
         const item = {
             ...editingItem,
             staff_id: user.id,
+            academic_year: editingItem?.academic_year || academicYear,
+            semester_type: editingItem?.semester_type || semesterType,
             status: (editingItem?.status === 'Returned') ? 'Pending' : (editingItem?.status || 'Pending'),
         }
 
@@ -110,7 +148,11 @@ export default function InspectionsPage() {
 
         const { error } = await supabase
             .from('inspections')
-            .update({ status: 'Submitted' })
+            .update({
+                status: 'Submitted',
+                academic_year: submitResult.academicYear,
+                semester_type: submitResult.semesterType,
+            })
             .eq('id', submitResult.id)
 
         if (!error) {
@@ -141,6 +183,16 @@ export default function InspectionsPage() {
     )
 
     const columns: ColumnDef<Inspection>[] = [
+        {
+            accessorKey: 'academic_year',
+            header: 'Academic Year',
+            cell: ({ row }) => row.original.academic_year || '-'
+        },
+        {
+            accessorKey: 'semester_type',
+            header: 'Semester',
+            cell: ({ row }) => row.original.semester_type || '-'
+        },
         {
             accessorKey: 'date',
             header: 'Date',
@@ -193,7 +245,12 @@ export default function InspectionsPage() {
                                     size="sm"
                                     className="h-8 gap-1 text-blue-600 border-blue-200 hover:bg-blue-50"
                                     onClick={() => {
-                                        setSubmitResult({ id: row.original.id, name: formatInAppTz(row.original.date, 'dd/MM/yyyy') })
+                                        setSubmitResult({
+                                            id: row.original.id,
+                                            name: formatInAppTz(row.original.date, 'dd/MM/yyyy'),
+                                            academicYear: row.original.academic_year || academicYear,
+                                            semesterType: row.original.semester_type || semesterType,
+                                        })
                                         setConfirmSubmitOpen(true)
                                     }}
                                 >
@@ -221,11 +278,24 @@ export default function InspectionsPage() {
 
     if (loading) return <div className="flex justify-center p-8"><Loader2 className="animate-spin" /></div>
 
+    const periodLocked = isLogbookLockedForPeriod(data, academicYear, semesterType)
+
     return (
         <div className="space-y-6">
+            {periodLocked && (
+                <Alert className="border-amber-200 bg-amber-50 text-amber-950">
+                    <AlertCircle className="h-4 w-4" />
+                    <AlertTitle>Logbook locked for this period</AlertTitle>
+                    <AlertDescription>
+                        Inspection for Academic Year {academicYear}, {semesterType} semester has been submitted.
+                        Other pages are locked for this year and semester only.
+                    </AlertDescription>
+                </Alert>
+            )}
+
             <div className="flex items-center justify-between">
                 <h1 className="text-3xl font-bold">Inspections</h1>
-                <Button onClick={() => { setEditingItem({}); setOpen(true); }}>
+                <Button onClick={() => { setEditingItem({ academic_year: academicYear, semester_type: semesterType }); setOpen(true); }}>
                     <Plus className="w-4 h-4 mr-2" />
                     Add Entry
                 </Button>
@@ -241,26 +311,37 @@ export default function InspectionsPage() {
                             <SelectValue placeholder="Select Year" />
                         </SelectTrigger>
                         <SelectContent>
-                            <SelectItem value="2025-2026">2025-2026</SelectItem>
+                            {academicYearOptions.map((year) => (
+                                <SelectItem key={year} value={year}>
+                                    {year}
+                                </SelectItem>
+                            ))}
                         </SelectContent>
                     </Select>
                 </div>
 
-                {/* Semester Filter */}
                 <div className="grid gap-2">
                     <Label>Semester</Label>
-                    <Select value={semesterType} onValueChange={setSemesterType} disabled>
+                    <Select value={semesterType} onValueChange={setSemesterType}>
                         <SelectTrigger className="w-[100px] h-8 bg-background">
                             <SelectValue placeholder="Sem Type" />
                         </SelectTrigger>
                         <SelectContent>
+                            <SelectItem value="Odd">Odd</SelectItem>
                             <SelectItem value="Even">Even</SelectItem>
                         </SelectContent>
                     </Select>
                 </div>
             </div>
 
-            <DataTable columns={columns} data={data} />
+            <DataTable
+                columns={columns}
+                data={data.filter((row) => {
+                    if (row.academic_year && row.academic_year !== academicYear) return false
+                    if (row.semester_type && row.semester_type !== semesterType) return false
+                    return true
+                })}
+            />
 
             <Dialog open={open} onOpenChange={setOpen}>
                 <DialogContent>
@@ -292,6 +373,16 @@ export default function InspectionsPage() {
                             <Input id="remarks" value={editingItem?.remarks || ''} onChange={e => setEditingItem({ ...editingItem, remarks: e.target.value })} />
                         </div>
                         <div className="grid grid-cols-2 gap-4">
+                            <div className="grid gap-2">
+                                <Label>Academic Year</Label>
+                                <Input value={editingItem?.academic_year || academicYear} disabled readOnly />
+                            </div>
+                            <div className="grid gap-2">
+                                <Label>Semester</Label>
+                                <Input value={editingItem?.semester_type || semesterType} disabled readOnly />
+                            </div>
+                        </div>
+                        <div className="grid grid-cols-2 gap-4">
                             <SignatureUploader
                                 label="HOD Initial"
                                 onUpload={(url) => setEditingItem({ ...editingItem, hod_initial_url: url })}
@@ -318,7 +409,9 @@ export default function InspectionsPage() {
                         <DialogDescription>
                             Are you sure you want to submit the inspection for <strong>{submitResult?.name}</strong> to the HOD?
                             <br /><br />
-                            <span className="text-red-500 font-medium">Warning: This action cannot be undone. You will not be able to edit or delete this entry after submission.</span>
+                            <span className="text-red-500 font-medium">
+                                Warning: After submission, the logbook will be locked for Academic Year {submitResult?.academicYear}, {submitResult?.semesterType} semester only. You can still edit other years/semesters.
+                            </span>
                         </DialogDescription>
                     </DialogHeader>
                     <DialogFooter>

@@ -31,6 +31,12 @@ import {
     SelectValue,
 } from "@/components/ui/select"
 import { fetchFilterOptions } from '@/app/actions/assessment'
+import {
+    DEFAULT_ACADEMIC_YEAR,
+    DEFAULT_SEMESTER_TYPE,
+    getAcademicYearOptions,
+    resolveAcademicYear,
+} from '@/lib/academic-years'
 // import { useToast } from '@/hooks/use-toast'
 
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
@@ -75,8 +81,9 @@ export default function WorkloadPage() {
     const [deptId, setDeptId] = useState('')
 
     // Filters
-    const [academicYear, setAcademicYear] = useState<string>("2025-2026")
-    const [semesterType, setSemesterType] = useState<string>("Even")
+    const [academicYear, setAcademicYear] = useState<string>(DEFAULT_ACADEMIC_YEAR)
+    const [academicYearOptions, setAcademicYearOptions] = useState<string[]>([DEFAULT_ACADEMIC_YEAR])
+    const [semesterType, setSemesterType] = useState<string>(DEFAULT_SEMESTER_TYPE)
 
     // Course and Department Mapping
     const [filterOptions, setFilterOptions] = useState<any>(null)
@@ -166,6 +173,27 @@ export default function WorkloadPage() {
         initializePage()
     }, [])
 
+    useEffect(() => {
+        if (!empId) return
+        if (semesterType === 'All') {
+            setWorkload(DAYS.map(day => ({
+                day_of_week: day,
+                period_1: '',
+                period_2: '',
+                period_3: '',
+                period_4: '',
+                period_5: '',
+                period_6: '',
+                period_7: '',
+                period_8: '',
+            })))
+            setLoadingSchedule(false)
+            return
+        }
+        reloadSchedule(undefined, academicYear, semesterType)
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [academicYear, semesterType, empId])
+
     const initializePage = async () => {
         setLoadingSchedule(true)
         setLoadingWorkload(true)
@@ -181,6 +209,9 @@ export default function WorkloadPage() {
         const filterResult = await fetchFilterOptions()
         if (filterResult.success) {
             setFilterOptions(filterResult.data)
+            const years = getAcademicYearOptions(filterResult.data)
+            setAcademicYearOptions(years)
+            setAcademicYear((current) => resolveAcademicYear(years, current))
         }
 
         // Build department list for "other dept" workload (same as lecture-plan)
@@ -211,16 +242,39 @@ export default function WorkloadPage() {
             if (profile.department_name) {
                 setDepartmentName(profile.department_name)
             }
-            await fetchFacultyWorkload(profile.emp_id, profile.department_no, deptList)
+            await fetchFacultyWorkload(
+                profile.emp_id,
+                profile.department_no,
+                deptList,
+                filterResult.success ? filterResult.data : undefined
+            )
         } else {
             console.error("Profile not found for user")
             setLoadingWorkload(false)
         }
 
-        await reloadSchedule(user.id)
+        setLoadingSchedule(false)
     }
 
-    const reloadSchedule = async (userId?: string) => {
+    const emptyScheduleDay = (day: string, year: string = academicYear, semester: string = semesterType) => ({
+        day_of_week: day,
+        academic_year: year,
+        semester_type: semester,
+        period_1: '',
+        period_2: '',
+        period_3: '',
+        period_4: '',
+        period_5: '',
+        period_6: '',
+        period_7: '',
+        period_8: '',
+    })
+
+    const reloadSchedule = async (
+        userId?: string,
+        year: string = academicYear,
+        semester: string = semesterType
+    ) => {
         setLoadingSchedule(true)
         // If userId not passed, get it
         let uid = userId
@@ -233,22 +287,37 @@ export default function WorkloadPage() {
             uid = user.id
         }
 
+        if (semester === 'All') {
+            setWorkload(DAYS.map(day => emptyScheduleDay(day, year, semester)))
+            setLoadingSchedule(false)
+            return
+        }
+
         const { data } = await supabase
             .from('workload')
             .select('*')
             .eq('staff_id', uid)
+            .eq('academic_year', year)
+            .eq('semester_type', semester)
 
         if (data) {
             const merged = DAYS.map(day => {
                 const existing = data.find((d: any) => d.day_of_week === day)
-                return existing || { day_of_week: day, period_1: '', period_2: '', period_3: '', period_4: '', period_5: '', period_6: '', period_7: '', period_8: '' }
+                return existing || emptyScheduleDay(day, year, semester)
             })
             setWorkload(merged)
+        } else {
+            setWorkload(DAYS.map(day => emptyScheduleDay(day, year, semester)))
         }
         setLoadingSchedule(false)
     }
 
-    const fetchFacultyWorkload = async (specificEmpId?: string, specificDeptId?: string, deptsOverride?: DeptOption[]) => {
+    const fetchFacultyWorkload = async (
+        specificEmpId?: string,
+        specificDeptId?: string,
+        deptsOverride?: DeptOption[],
+        filterData?: unknown
+    ) => {
         const eId = (typeof specificEmpId === 'string' ? specificEmpId : empId)
         const dId = (typeof specificDeptId === 'string' ? specificDeptId : deptId)
         const deptList = deptsOverride && deptsOverride.length ? deptsOverride : departments
@@ -311,6 +380,12 @@ export default function WorkloadPage() {
             }
 
             setFacultyWorkload(merged)
+            const years = getAcademicYearOptions(
+                filterData ?? filterOptions,
+                merged.map((item) => item.Academicyear)
+            )
+            setAcademicYearOptions(years)
+            setAcademicYear((current) => resolveAcademicYear(years, current))
         } catch (error) {
             console.error("Failed to fetch faculty workload", error)
             setFacultyWorkload([])
@@ -321,19 +396,37 @@ export default function WorkloadPage() {
 
     const handleSave = async (e: React.FormEvent) => {
         e.preventDefault()
+        if (semesterType === 'All') {
+            alert('Select Odd or Even semester to save the weekly schedule.')
+            return
+        }
+
         const { data: { user } } = await supabase.auth.getUser()
         if (!user) return
 
+        const payload = {
+            ...editingDay,
+            staff_id: user.id,
+            academic_year: academicYear,
+            semester_type: semesterType,
+        }
+
         let operation
-        if (editingDay.id) {
-            operation = supabase.from('workload').update(editingDay).eq('id', editingDay.id)
+        if (payload.id) {
+            operation = supabase.from('workload').update(payload).eq('id', payload.id)
         } else {
-            // Check if exists first (race condition possible but unlikely for single user)
-            const { data: existing } = await supabase.from('workload').select('id').eq('staff_id', user.id).eq('day_of_week', editingDay.day_of_week).single()
+            const { data: existing } = await supabase
+                .from('workload')
+                .select('id')
+                .eq('staff_id', user.id)
+                .eq('day_of_week', payload.day_of_week)
+                .eq('academic_year', academicYear)
+                .eq('semester_type', semesterType)
+                .maybeSingle()
             if (existing) {
-                operation = supabase.from('workload').update(editingDay).eq('id', existing.id)
+                operation = supabase.from('workload').update(payload).eq('id', existing.id)
             } else {
-                operation = supabase.from('workload').insert({ ...editingDay, staff_id: user.id })
+                operation = supabase.from('workload').insert(payload)
             }
         }
 
@@ -341,13 +434,13 @@ export default function WorkloadPage() {
 
         if (!opError) {
             setOpen(false)
-            reloadSchedule()
+            reloadSchedule(undefined, academicYear, semesterType)
         } else {
             alert('Error saving workload')
         }
     }
 
-    if ((loadingSchedule && !workload.length) || loadingWorkload) {
+    if (loadingWorkload && facultyWorkload.length === 0 && loadingSchedule && workload.length === 0) {
         return <div className="flex justify-center p-8"><Loader2 className="animate-spin" /></div>
     }
 
@@ -356,7 +449,7 @@ export default function WorkloadPage() {
         // Filter by Academic Year if selected
         if (academicYear && item.Academicyear !== academicYear) return false;
 
-        // Filter by Semester Type
+        // Filter by Semester Type (Odd: 1,3,5,7 | Even: 2,4,6,8)
         const sem = Number(item.Semester);
         if (semesterType === "Odd" && sem % 2 === 0) return false;
         if (semesterType === "Even" && sem % 2 !== 0) return false;
@@ -396,19 +489,25 @@ export default function WorkloadPage() {
                                     <SelectValue placeholder="Select Year" />
                                 </SelectTrigger>
                                 <SelectContent>
-                                    <SelectItem value="2025-2026">2025-2026</SelectItem>
+                                    {academicYearOptions.map((year) => (
+                                        <SelectItem key={year} value={year}>
+                                            {year}
+                                        </SelectItem>
+                                    ))}
                                 </SelectContent>
                             </Select>
                         </div>
 
                         <div className="grid gap-2">
                             <Label>Semester</Label>
-                            <Select value={semesterType} onValueChange={setSemesterType} disabled>
+                            <Select value={semesterType} onValueChange={setSemesterType}>
                                 <SelectTrigger className="w-[100px] h-8 bg-background">
                                     <SelectValue placeholder="Sem Type" />
                                 </SelectTrigger>
                                 <SelectContent>
+                                    <SelectItem value="Odd">Odd</SelectItem>
                                     <SelectItem value="Even">Even</SelectItem>
+                                    <SelectItem value="All">All</SelectItem>
                                 </SelectContent>
                             </Select>
                         </div>
@@ -507,12 +606,22 @@ export default function WorkloadPage() {
                 </div>
             </div>
 
-            {/* Existing Weekly Schedule Section */}
+            {/* Weekly Schedule Section */}
             <div className="space-y-4 pt-8 border-t">
-                <div className="flex items-center justify-between">
-                    <h1 className="text-2xl font-bold">Weekly Schedule</h1>
+                <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                        <h1 className="text-2xl font-bold">Weekly Schedule</h1>
+                        <p className="text-sm text-muted-foreground">
+                            Academic Year: {academicYear} | Semester: {semesterType}
+                        </p>
+                    </div>
                 </div>
 
+                {semesterType === 'All' ? (
+                    <div className="rounded-md border bg-muted/30 p-6 text-sm text-muted-foreground">
+                        Select <strong>Odd</strong> or <strong>Even</strong> semester to view and edit the weekly schedule for this academic year.
+                    </div>
+                ) : (
                 <div className="rounded-md border bg-card">
                     <Table>
                         <TableHeader>
@@ -525,7 +634,14 @@ export default function WorkloadPage() {
                             </TableRow>
                         </TableHeader>
                         <TableBody>
-                            {workload.map((day) => (
+                            {loadingSchedule ? (
+                                <TableRow>
+                                    <TableCell colSpan={10} className="h-24 text-center">
+                                        <Loader2 className="mx-auto h-6 w-6 animate-spin" />
+                                    </TableCell>
+                                </TableRow>
+                            ) : (
+                            workload.map((day) => (
                                 <TableRow key={day.day_of_week}>
                                     <TableCell className="font-medium">{day.day_of_week}</TableCell>
                                     <TableCell>{day.period_1}</TableCell>
@@ -537,15 +653,17 @@ export default function WorkloadPage() {
                                     <TableCell>{day.period_7}</TableCell>
                                     <TableCell>{day.period_8}</TableCell>
                                     <TableCell className="text-right">
-                                        <Button variant="ghost" size="icon" onClick={() => { setEditingDay(day); setOpen(true); }}>
+                                        <Button variant="ghost" size="icon" onClick={() => { setEditingDay({ ...day, academic_year: academicYear, semester_type: semesterType }); setOpen(true); }}>
                                             <Pencil className="w-4 h-4" />
                                         </Button>
                                     </TableCell>
                                 </TableRow>
-                            ))}
+                            ))
+                            )}
                         </TableBody>
                     </Table>
                 </div>
+                )}
 
                 <Dialog open={open} onOpenChange={setOpen}>
                     <DialogContent className="sm:max-w-[600px]">

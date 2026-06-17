@@ -3,16 +3,18 @@
 import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import {
+    getLogbookLockMessage,
     getLogbookLockStatus,
-    isLogbookLocked,
-    LOGBOOK_LOCK_MESSAGE,
+    isLogbookLockedForPeriod,
 } from '@/lib/inspection-lock'
 
-export function useInspectionLock() {
+export function useInspectionLock(academicYear?: string, semesterType?: string) {
     const supabase = createClient()
     const [loading, setLoading] = useState(true)
     const [isLocked, setIsLocked] = useState(false)
     const [lockStatus, setLockStatus] = useState<string | null>(null)
+
+    const lockMessage = getLogbookLockMessage(academicYear, semesterType)
 
     useEffect(() => {
         let active = true
@@ -34,13 +36,19 @@ export function useInspectionLock() {
 
             const { data } = await supabase
                 .from('inspections')
-                .select('status')
+                .select('status, academic_year, semester_type')
                 .eq('staff_id', user.id)
 
             if (!active) return
 
-            setIsLocked(isLogbookLocked(data))
-            setLockStatus(getLogbookLockStatus(data))
+            const locked = academicYear && semesterType && semesterType !== 'All'
+                ? isLogbookLockedForPeriod(data, academicYear, semesterType)
+                : false
+
+            setIsLocked(locked)
+            setLockStatus(
+                locked ? getLogbookLockStatus(data, academicYear, semesterType) : null
+            )
             setLoading(false)
         }
 
@@ -49,16 +57,16 @@ export function useInspectionLock() {
         return () => {
             active = false
         }
-    }, [supabase])
+    }, [supabase, academicYear, semesterType])
 
     return {
         loading,
         isLocked,
         lockStatus,
-        lockMessage: LOGBOOK_LOCK_MESSAGE,
+        lockMessage,
         blockIfLocked: () => {
             if (isLocked) {
-                alert(LOGBOOK_LOCK_MESSAGE)
+                alert(lockMessage)
                 return true
             }
             return false

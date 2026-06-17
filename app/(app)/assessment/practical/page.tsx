@@ -20,6 +20,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { getTodayInAppTz } from '@/lib/datetime'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { DEFAULT_ACADEMIC_YEAR, DEFAULT_SEMESTER_TYPE } from '@/lib/academic-years'
 import { fetchFilterOptions, fetchStudentData } from '@/app/actions/assessment'
 import { useInspectionLock } from '@/hooks/use-inspection-lock'
 import { LogbookLockBanner } from '@/components/LogbookLockBanner'
@@ -52,7 +53,6 @@ export default function PracticalAssessmentPage() {
     const [importing, setImporting] = useState(false)
     const fileInputRef = useRef<HTMLInputElement>(null)
     const supabase = createClient()
-    const { isLocked, lockStatus, blockIfLocked } = useInspectionLock()
 
     // Subject Filter State
     const [subjects, setSubjects] = useState<SubjectItem[]>([])
@@ -60,8 +60,9 @@ export default function PracticalAssessmentPage() {
     const [loadingSubjects, setLoadingSubjects] = useState(false)
 
     // Academic Year and Semester Filter State
-    const [academicYear, setAcademicYear] = useState<string>("2025-2026")
-    const [semesterType, setSemesterType] = useState<string>("Even")
+    const [academicYear, setAcademicYear] = useState<string>(DEFAULT_ACADEMIC_YEAR)
+    const [semesterType, setSemesterType] = useState<string>(DEFAULT_SEMESTER_TYPE)
+    const { isLocked, lockStatus, blockIfLocked, lockMessage } = useInspectionLock(academicYear, semesterType)
 
     // Store user profile data for refetching
     const [userProfile, setUserProfile] = useState<{ emp_id: string; department_no: string } | null>(null)
@@ -70,7 +71,7 @@ export default function PracticalAssessmentPage() {
     const [filterOptions, setFilterOptions] = useState<any>(null)
     const [loadingFilters, setLoadingFilters] = useState(true)
     const [filterError, setFilterError] = useState<string | null>(null)
-    const [selectedYear, setSelectedYear] = useState('2025-2026')
+    const [selectedYear, setSelectedYear] = useState(DEFAULT_ACADEMIC_YEAR)
     const [selectedCourse, setSelectedCourse] = useState('')
     const [selectedSemester, setSelectedSemester] = useState('2')
     const [selectedMode, setSelectedMode] = useState('')
@@ -477,7 +478,7 @@ export default function PracticalAssessmentPage() {
             return
         }
 
-        const year = selectedYear || '2025-2026'
+        const year = selectedYear || DEFAULT_ACADEMIC_YEAR
 
         setLoadingStudents(true)
         setStudentError(null)
@@ -829,7 +830,13 @@ export default function PracticalAssessmentPage() {
                 <p className="text-gray-500">Manage student assessments and practical marks.</p>
             </div>
 
-            <LogbookLockBanner isLocked={isLocked} lockStatus={lockStatus} />
+            <LogbookLockBanner
+                isLocked={isLocked}
+                lockStatus={lockStatus}
+                academicYear={academicYear}
+                semesterType={semesterType}
+                lockMessage={lockMessage}
+            />
 
             {/* Filter Students - same behaviour as Theory: Subject first, then Course/Semester/Mode auto-filled */}
             <Card className="border-t-4 border-t-indigo-500 shadow-md">

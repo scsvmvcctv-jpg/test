@@ -16,6 +16,7 @@ import {
     DialogTitle,
 } from '@/components/ui/dialog'
 import { AlertCircle, Loader2, Search, Save, CheckSquare, Edit2, X } from 'lucide-react'
+import { DEFAULT_ACADEMIC_YEAR, DEFAULT_SEMESTER_TYPE } from '@/lib/academic-years'
 import { fetchFilterOptions, fetchStudentData } from '@/app/actions/assessment'
 import { useInspectionLock } from '@/hooks/use-inspection-lock'
 import { LogbookLockBanner } from '@/components/LogbookLockBanner'
@@ -42,7 +43,6 @@ type TheoryAssessment = {
 
 export default function AssessmentTheoryPage() {
     const supabase = createClient()
-    const { isLocked, lockStatus, blockIfLocked } = useInspectionLock()
 
     // Filter State
     const [filterOptions, setFilterOptions] = useState<any>(null)
@@ -50,7 +50,7 @@ export default function AssessmentTheoryPage() {
     const [filterError, setFilterError] = useState<string | null>(null)
 
     // Selection State (year/semester default 2025-2026 and even 2,4,6,8; course from filters)
-    const [selectedYear, setSelectedYear] = useState('2025-2026')
+    const [selectedYear, setSelectedYear] = useState(DEFAULT_ACADEMIC_YEAR)
     const [selectedCourse, setSelectedCourse] = useState('')
     const [selectedSemester, setSelectedSemester] = useState('2')
     const [selectedMode, setSelectedMode] = useState('')
@@ -68,8 +68,9 @@ export default function AssessmentTheoryPage() {
     const [subjects, setSubjects] = useState<SubjectItem[]>([])
     const [selectedSubject, setSelectedSubject] = useState<string>("")
     const [loadingSubjects, setLoadingSubjects] = useState(false)
-    const [academicYear, setAcademicYear] = useState<string>("2025-2026")
-    const [semesterType, setSemesterType] = useState<string>("Even")
+    const [academicYear, setAcademicYear] = useState<string>(DEFAULT_ACADEMIC_YEAR)
+    const [semesterType, setSemesterType] = useState<string>(DEFAULT_SEMESTER_TYPE)
+    const { isLocked, lockStatus, blockIfLocked, lockMessage } = useInspectionLock(academicYear, semesterType)
     const [userProfile, setUserProfile] = useState<{ emp_id: string; department_no: string } | null>(null)
     const [authError, setAuthError] = useState<string | null>(null)
 
@@ -333,7 +334,7 @@ export default function AssessmentTheoryPage() {
             return
         }
 
-        const year = selectedYear || '2025-2026'
+        const year = selectedYear || DEFAULT_ACADEMIC_YEAR
 
         setLoadingStudents(true)
         setStudentError(null)
@@ -647,7 +648,13 @@ export default function AssessmentTheoryPage() {
                 <p className="text-gray-500">Manage student assessments and theory marks.</p>
             </div>
 
-            <LogbookLockBanner isLocked={isLocked} lockStatus={lockStatus} />
+            <LogbookLockBanner
+                isLocked={isLocked}
+                lockStatus={lockStatus}
+                academicYear={academicYear}
+                semesterType={semesterType}
+                lockMessage={lockMessage}
+            />
 
             {/* Authentication Error Display */}
             {authError && (

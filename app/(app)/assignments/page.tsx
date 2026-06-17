@@ -14,6 +14,12 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Loader2, Plus, Pencil, Trash2, Upload, Download, FileText, ExternalLink, FileDown, Printer } from 'lucide-react'
+import {
+    DEFAULT_ACADEMIC_YEAR,
+    DEFAULT_SEMESTER_TYPE,
+    getAcademicYearOptions,
+    resolveAcademicYear,
+} from '@/lib/academic-years'
 import { fetchFilterOptions } from '@/app/actions/assessment'
 import { ColumnDef } from '@tanstack/react-table'
 import { formatInAppTz, getTodayInAppTz, parseCSVDateToAppTz } from '@/lib/datetime'
@@ -58,7 +64,6 @@ export default function AssignmentsPage() {
     const [uploading, setUploading] = useState(false)
     const fileInputRef = useRef<HTMLInputElement>(null)
     const supabase = createClient()
-    const { isLocked, lockStatus, blockIfLocked } = useInspectionLock()
 
     // Subject and Section Filter State
     const [subjects, setSubjects] = useState<SubjectItem[]>([])
@@ -67,8 +72,10 @@ export default function AssignmentsPage() {
     const [loadingSubjects, setLoadingSubjects] = useState(false)
 
     // Academic Year and Semester Filter State
-    const [academicYear, setAcademicYear] = useState<string>("2025-2026")
-    const [semesterType, setSemesterType] = useState<string>("Even")
+    const [academicYear, setAcademicYear] = useState<string>(DEFAULT_ACADEMIC_YEAR)
+    const [academicYearOptions, setAcademicYearOptions] = useState<string[]>([DEFAULT_ACADEMIC_YEAR])
+    const [semesterType, setSemesterType] = useState<string>(DEFAULT_SEMESTER_TYPE)
+    const { isLocked, lockStatus, blockIfLocked, lockMessage } = useInspectionLock(academicYear, semesterType)
 
     // Store user profile data for refetching
     const [userProfile, setUserProfile] = useState<{ emp_id: string; department_no: string } | null>(null)
@@ -105,6 +112,9 @@ export default function AssignmentsPage() {
         let deptList: DeptOption[] = []
         const filterResult = await fetchFilterOptions()
         if (filterResult.success && filterResult.data) {
+            const years = getAcademicYearOptions(filterResult.data)
+            setAcademicYearOptions(years)
+            setAcademicYear((current) => resolveAcademicYear(years, current))
             const raw = filterResult.data as any
             const arr = raw.departments ?? raw.Department ?? raw.Dept
             if (Array.isArray(arr) && arr.length) {
@@ -664,7 +674,13 @@ export default function AssignmentsPage() {
 
     return (
         <div className="space-y-6">
-            <LogbookLockBanner isLocked={isLocked} lockStatus={lockStatus} />
+            <LogbookLockBanner
+                isLocked={isLocked}
+                lockStatus={lockStatus}
+                academicYear={academicYear}
+                semesterType={semesterType}
+                lockMessage={lockMessage}
+            />
             <>
                     <div className="flex flex-col gap-4">
                         <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
@@ -709,7 +725,11 @@ export default function AssignmentsPage() {
                                         <SelectValue placeholder="Select Year" />
                                     </SelectTrigger>
                                     <SelectContent>
-                                        <SelectItem value="2025-2026">2025-2026</SelectItem>
+                                        {academicYearOptions.map((year) => (
+                                            <SelectItem key={year} value={year}>
+                                                {year}
+                                            </SelectItem>
+                                        ))}
                                     </SelectContent>
                                 </Select>
                             </div>
@@ -717,12 +737,14 @@ export default function AssignmentsPage() {
                             {/* Semester Filter */}
                             <div className="grid gap-2">
                                 <Label>Semester</Label>
-                                <Select value={semesterType} onValueChange={setSemesterType} disabled>
+                                <Select value={semesterType} onValueChange={setSemesterType}>
                                     <SelectTrigger className="w-[100px] h-8 bg-background">
                                         <SelectValue placeholder="Sem Type" />
                                     </SelectTrigger>
                                     <SelectContent>
+                                        <SelectItem value="Odd">Odd</SelectItem>
                                         <SelectItem value="Even">Even</SelectItem>
+                                        <SelectItem value="All">All</SelectItem>
                                     </SelectContent>
                                 </Select>
                             </div>
