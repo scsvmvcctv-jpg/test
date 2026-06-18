@@ -105,6 +105,20 @@ export default function TestsPage() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [academicYear, semesterType])
 
+    useEffect(() => {
+        const refetchTests = async () => {
+            const { data: { user } } = await supabase.auth.getUser()
+            if (user) {
+                await fetchTests(user.id, academicYear, semesterType)
+            }
+        }
+
+        if (userProfile) {
+            refetchTests()
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [academicYear, semesterType, userProfile])
+
     const initializeData = async () => {
         setLoading(true)
         setLoadingSubjects(true)
@@ -143,7 +157,7 @@ export default function TestsPage() {
         }
 
         // Fetch Tests
-        await fetchTests(user.id)
+        await fetchTests(user.id, academicYear, semesterType)
 
         setLoading(false)
         setLoadingSubjects(false)
@@ -230,30 +244,52 @@ export default function TestsPage() {
         }
     }
 
-    const fetchTests = async (userId: string) => {
-        const { data } = await supabase
+    const fetchTests = async (
+        userId: string,
+        year: string = academicYear,
+        semester: string = semesterType
+    ) => {
+        let query = supabase
             .from('tests')
             .select('*')
             .eq('staff_id', userId)
-            .order('proposed_test_date', { ascending: true })
+            .eq('academic_year', year)
+
+        if (semester !== 'All') {
+            query = query.eq('semester_type', semester)
+        }
+
+        const { data, error } = await query.order('proposed_test_date', { ascending: true })
+
+        if (error) {
+            console.error('Failed to fetch tests', error)
+            setData([])
+            return
+        }
 
         if (data) setData(data)
     }
 
     const reloadData = async () => {
         const { data: { user } } = await supabase.auth.getUser()
-        if (user) await fetchTests(user.id)
+        if (user) await fetchTests(user.id, academicYear, semesterType)
     }
 
     const handleSave = async (e: React.FormEvent) => {
         e.preventDefault()
         if (blockIfLocked()) return
+        if (semesterType === 'All') {
+            alert('Please select Odd or Even semester before saving.')
+            return
+        }
         const { data: { user } } = await supabase.auth.getUser()
         if (!user) return
 
         const item: any = {
             ...editingItem,
             staff_id: user.id,
+            academic_year: academicYear,
+            semester_type: semesterType,
         }
         if (item.section === '' || item.section === undefined) {
             item.section = null
@@ -285,6 +321,10 @@ export default function TestsPage() {
 
     const handleImportClick = () => {
         if (blockIfLocked()) return
+        if (semesterType === 'All') {
+            alert('Please select Odd or Even semester before importing CSV.')
+            return
+        }
         if (!selectedSubject || selectedSubject === '__ALL__') {
             alert('Please select a subject from the dropdown before importing CSV.')
             return
@@ -300,6 +340,11 @@ export default function TestsPage() {
         const file = event.target.files?.[0]
         if (!file) return
 
+        if (semesterType === 'All') {
+            alert('Please select Odd or Even semester before importing CSV.')
+            if (fileInputRef.current) fileInputRef.current.value = ''
+            return
+        }
         if (!selectedSubject || selectedSubject === '__ALL__') {
             alert('Please select a subject from the dropdown before importing CSV.')
             if (fileInputRef.current) fileInputRef.current.value = ''
@@ -346,6 +391,8 @@ export default function TestsPage() {
                         staff_id: user.id,
                         subject: importSubjectName,
                         section: importSection,
+                        academic_year: academicYear,
+                        semester_type: semesterType,
                         proposed_test_date: proposed || null,
                         actual_date: actual || null,
                         date_returned: returned || null,

@@ -92,9 +92,24 @@ export default async function DashboardPage() {
             .eq('staff_id', user.id)
             .eq('academic_year', academicYear)
             .eq('semester_type', semesterType),
-        supabase.from('tests').select('subject').eq('staff_id', user.id),
-        supabase.from('assignments').select('subject').eq('staff_id', user.id),
-        supabase.from('extra_classes').select('subject').eq('staff_id', user.id),
+        supabase
+            .from('tests')
+            .select('subject, academic_year, semester_type')
+            .eq('staff_id', user.id)
+            .eq('academic_year', academicYear)
+            .eq('semester_type', semesterType),
+        supabase
+            .from('assignments')
+            .select('subject, academic_year, semester_type')
+            .eq('staff_id', user.id)
+            .eq('academic_year', academicYear)
+            .eq('semester_type', semesterType),
+        supabase
+            .from('extra_classes')
+            .select('subject, academic_year, semester_type')
+            .eq('staff_id', user.id)
+            .eq('academic_year', academicYear)
+            .eq('semester_type', semesterType),
         supabase.from('assessment_theory').select('subject').eq('staff_id', user.id),
         supabase.from('assessment_practical').select('subject').eq('staff_id', user.id),
     ])

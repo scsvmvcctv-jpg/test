@@ -102,6 +102,20 @@ export default function AssignmentsPage() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [academicYear, semesterType])
 
+    useEffect(() => {
+        const refetchAssignments = async () => {
+            const { data: { user } } = await supabase.auth.getUser()
+            if (user) {
+                await fetchAssignments(user.id, academicYear, semesterType)
+            }
+        }
+
+        if (userProfile) {
+            refetchAssignments()
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [academicYear, semesterType, userProfile])
+
     const initializeData = async () => {
         setLoading(true)
         setLoadingSubjects(true)
@@ -140,7 +154,7 @@ export default function AssignmentsPage() {
         }
 
         // Fetch Assignments
-        await fetchAssignments(user.id)
+        await fetchAssignments(user.id, academicYear, semesterType)
 
         setLoading(false)
         setLoadingSubjects(false)
@@ -227,30 +241,52 @@ export default function AssignmentsPage() {
         }
     }
 
-    const fetchAssignments = async (userId: string) => {
-        const { data } = await supabase
+    const fetchAssignments = async (
+        userId: string,
+        year: string = academicYear,
+        semester: string = semesterType
+    ) => {
+        let query = supabase
             .from('assignments')
             .select('*')
             .eq('staff_id', userId)
-            .order('proposed_date', { ascending: true })
+            .eq('academic_year', year)
+
+        if (semester !== 'All') {
+            query = query.eq('semester_type', semester)
+        }
+
+        const { data, error } = await query.order('proposed_date', { ascending: true })
+
+        if (error) {
+            console.error('Failed to fetch assignments', error)
+            setData([])
+            return
+        }
 
         if (data) setData(data)
     }
 
     const reloadData = async () => {
         const { data: { user } } = await supabase.auth.getUser()
-        if (user) await fetchAssignments(user.id)
+        if (user) await fetchAssignments(user.id, academicYear, semesterType)
     }
 
     const handleSave = async (e: React.FormEvent) => {
         e.preventDefault()
         if (blockIfLocked()) return
+        if (semesterType === 'All') {
+            alert('Please select Odd or Even semester before saving.')
+            return
+        }
         const { data: { user } } = await supabase.auth.getUser()
         if (!user) return
 
         const item: any = {
             ...editingItem,
             staff_id: user.id,
+            academic_year: academicYear,
+            semester_type: semesterType,
         }
         if (item.section === '' || item.section === undefined) {
             item.section = null
@@ -282,6 +318,10 @@ export default function AssignmentsPage() {
 
     const handleImportClick = () => {
         if (blockIfLocked()) return
+        if (semesterType === 'All') {
+            alert('Please select Odd or Even semester before importing CSV.')
+            return
+        }
         if (!selectedSubject || selectedSubject === '__ALL__') {
             alert('Please select a subject from the dropdown before importing CSV.')
             return
@@ -297,6 +337,11 @@ export default function AssignmentsPage() {
         const file = event.target.files?.[0]
         if (!file) return
 
+        if (semesterType === 'All') {
+            alert('Please select Odd or Even semester before importing CSV.')
+            if (fileInputRef.current) fileInputRef.current.value = ''
+            return
+        }
         if (!selectedSubject || selectedSubject === '__ALL__') {
             alert('Please select a subject from the dropdown before importing CSV.')
             if (fileInputRef.current) fileInputRef.current.value = ''
@@ -343,6 +388,8 @@ export default function AssignmentsPage() {
                         staff_id: user.id,
                         subject: importSubjectName,
                         section: importSection,
+                        academic_year: academicYear,
+                        semester_type: semesterType,
                         type: row.type || row.Type || 'Assignment',
                         proposed_date: proposed || null,
                         actual_date: actual || null,

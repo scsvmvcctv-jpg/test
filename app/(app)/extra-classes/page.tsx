@@ -98,6 +98,20 @@ export default function ExtraClassesPage() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [academicYear, semesterType])
 
+    useEffect(() => {
+        const refetchExtraClasses = async () => {
+            const { data: { user } } = await supabase.auth.getUser()
+            if (user) {
+                await fetchExtraClasses(user.id, academicYear, semesterType)
+            }
+        }
+
+        if (userProfile) {
+            refetchExtraClasses()
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [academicYear, semesterType, userProfile])
+
     const initializeData = async () => {
         setLoading(true)
         setLoadingSubjects(true)
@@ -133,7 +147,7 @@ export default function ExtraClassesPage() {
             await fetchSubjects(profile.emp_id, profile.department_no, academicYear, semesterType, deptList)
         }
 
-        await fetchExtraClasses(user.id)
+        await fetchExtraClasses(user.id, academicYear, semesterType)
         setLoading(false)
         setLoadingSubjects(false)
     }
@@ -219,30 +233,52 @@ export default function ExtraClassesPage() {
         }
     }
 
-    const fetchExtraClasses = async (userId: string) => {
-        const { data } = await supabase
+    const fetchExtraClasses = async (
+        userId: string,
+        year: string = academicYear,
+        semester: string = semesterType
+    ) => {
+        let query = supabase
             .from('extra_classes')
             .select('*')
             .eq('staff_id', userId)
-            .order('date', { ascending: true })
+            .eq('academic_year', year)
+
+        if (semester !== 'All') {
+            query = query.eq('semester_type', semester)
+        }
+
+        const { data, error } = await query.order('date', { ascending: true })
+
+        if (error) {
+            console.error('Failed to fetch extra classes', error)
+            setData([])
+            return
+        }
 
         if (data) setData(data)
     }
 
     const reloadData = async () => {
         const { data: { user } } = await supabase.auth.getUser()
-        if (user) await fetchExtraClasses(user.id)
+        if (user) await fetchExtraClasses(user.id, academicYear, semesterType)
     }
 
     const handleSave = async (e: React.FormEvent) => {
         e.preventDefault()
         if (blockIfLocked()) return
+        if (semesterType === 'All') {
+            alert('Please select Odd or Even semester before saving.')
+            return
+        }
         const { data: { user } } = await supabase.auth.getUser()
         if (!user) return
 
         const item: any = {
             ...editingItem,
             staff_id: user.id,
+            academic_year: academicYear,
+            semester_type: semesterType,
         }
         if (item.section === '' || item.section === undefined) {
             item.section = null
@@ -274,6 +310,10 @@ export default function ExtraClassesPage() {
 
     const handleImportClick = () => {
         if (blockIfLocked()) return
+        if (semesterType === 'All') {
+            alert('Please select Odd or Even semester before importing CSV.')
+            return
+        }
         if (!selectedSubject || selectedSubject === '__ALL__') {
             alert('Please select a subject from the dropdown before importing CSV.')
             return
@@ -289,6 +329,11 @@ export default function ExtraClassesPage() {
         const file = event.target.files?.[0]
         if (!file) return
 
+        if (semesterType === 'All') {
+            alert('Please select Odd or Even semester before importing CSV.')
+            if (fileInputRef.current) fileInputRef.current.value = ''
+            return
+        }
         if (!selectedSubject || selectedSubject === '__ALL__') {
             alert('Please select a subject from the dropdown before importing CSV.')
             if (fileInputRef.current) fileInputRef.current.value = ''
@@ -333,6 +378,8 @@ export default function ExtraClassesPage() {
                         staff_id: user.id,
                         subject: importSubjectName,
                         section: importSection,
+                        academic_year: academicYear,
+                        semester_type: semesterType,
                         date: dateVal || null,
                         period: parseInt(row.period || row.Period || '0'),
                         topic: row.topic || row.Topic,
