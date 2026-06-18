@@ -92,3 +92,30 @@ export function matchesWorkloadSubject(
         return value === name || value === code
     })
 }
+
+type PeriodTaggedRow = {
+    subject?: string | null
+    academic_year?: string | null
+    semester_type?: string | null
+}
+
+/** Prefer stored academic year/semester; fall back to workload subject match for legacy rows. */
+export function filterSubjectRowsByPeriod<T extends PeriodTaggedRow>(
+    items: T[] | null | undefined,
+    workloadItems: WorkloadSubjectRow[],
+    academicYear: string = DEFAULT_ACADEMIC_YEAR,
+    semesterType: string = DEFAULT_SEMESTER_TYPE
+): T[] {
+    return (items || []).filter((item) => {
+        const year = (item.academic_year || '').trim()
+        const sem = (item.semester_type || '').trim()
+
+        if (year && sem) {
+            if (academicYear && year !== academicYear) return false
+            if (semesterType !== 'All' && sem !== semesterType) return false
+            return true
+        }
+
+        return matchesWorkloadSubject(item.subject, workloadItems)
+    })
+}

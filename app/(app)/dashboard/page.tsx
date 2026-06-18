@@ -2,8 +2,8 @@ import { createClient } from '@/lib/supabase/server'
 import {
     DEFAULT_ACADEMIC_YEAR,
     DEFAULT_SEMESTER_TYPE,
+    filterSubjectRowsByPeriod,
     filterWorkloadByPeriod,
-    matchesWorkloadSubject,
     type WorkloadSubjectRow,
 } from '@/lib/academic-years'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -59,6 +59,7 @@ export default async function DashboardPage() {
 
     const academicYear = DEFAULT_ACADEMIC_YEAR
     const semesterType = DEFAULT_SEMESTER_TYPE
+    const periodLabel = `${academicYear}, ${semesterType} semester`
 
     const { data: profile } = await supabase
         .from('profiles')
@@ -85,7 +86,12 @@ export default async function DashboardPage() {
         { data: theoryAssessments },
         { data: practicalAssessments },
     ] = await Promise.all([
-        supabase.from('lecture_plans').select('subject, actual_completion_date').eq('staff_id', user.id),
+        supabase
+            .from('lecture_plans')
+            .select('subject, actual_completion_date, academic_year, semester_type')
+            .eq('staff_id', user.id)
+            .eq('academic_year', academicYear)
+            .eq('semester_type', semesterType),
         supabase.from('tests').select('subject').eq('staff_id', user.id),
         supabase.from('assignments').select('subject').eq('staff_id', user.id),
         supabase.from('extra_classes').select('subject').eq('staff_id', user.id),
@@ -93,23 +99,24 @@ export default async function DashboardPage() {
         supabase.from('assessment_practical').select('subject').eq('staff_id', user.id),
     ])
 
-    const filteredLecturePlans = (lecturePlans || []).filter((row) =>
-        matchesWorkloadSubject(row.subject, periodWorkload)
+    const filteredLecturePlans = filterSubjectRowsByPeriod(
+        lecturePlans,
+        periodWorkload,
+        academicYear,
+        semesterType
     )
     const lecturePlanCount = filteredLecturePlans.length
     const completedTopicsCount = filteredLecturePlans.filter((row) => row.actual_completion_date).length
-    const testsCount = (tests || []).filter((row) => matchesWorkloadSubject(row.subject, periodWorkload)).length
-    const assignmentsCount = (assignments || []).filter((row) =>
-        matchesWorkloadSubject(row.subject, periodWorkload)
-    ).length
-    const extraClassesCount = (extraClasses || []).filter((row) =>
-        matchesWorkloadSubject(row.subject, periodWorkload)
-    ).length
-    const theoryCount = (theoryAssessments || []).filter((row) =>
-        matchesWorkloadSubject(row.subject, periodWorkload)
-    ).length
-    const practicalCount = (practicalAssessments || []).filter((row) =>
-        matchesWorkloadSubject(row.subject, periodWorkload)
+
+    const testsCount = filterSubjectRowsByPeriod(tests, periodWorkload, academicYear, semesterType).length
+    const assignmentsCount = filterSubjectRowsByPeriod(assignments, periodWorkload, academicYear, semesterType).length
+    const extraClassesCount = filterSubjectRowsByPeriod(extraClasses, periodWorkload, academicYear, semesterType).length
+    const theoryCount = filterSubjectRowsByPeriod(theoryAssessments, periodWorkload, academicYear, semesterType).length
+    const practicalCount = filterSubjectRowsByPeriod(
+        practicalAssessments,
+        periodWorkload,
+        academicYear,
+        semesterType
     ).length
 
     return (
@@ -140,7 +147,7 @@ export default async function DashboardPage() {
                                 <div className="text-5xl font-extrabold tracking-tight mt-2">{lecturePlanCount}</div>
                                 <p className="text-sm font-medium text-blue-100 mt-2 flex items-center gap-2">
                                     <span className="w-2 h-2 bg-blue-300 rounded-full animate-pulse" />
-                                    {completedTopicsCount} topics completed
+                                    {completedTopicsCount} topics completed · {periodLabel}
                                 </p>
                                 <div className="mt-4">
                                     <Button variant="secondary" size="sm" className="w-full bg-white/20 hover:bg-white/30 text-white border-white/30">
@@ -167,7 +174,7 @@ export default async function DashboardPage() {
                                 <div className="text-5xl font-extrabold tracking-tight mt-2">{testsCount}</div>
                                 <p className="text-sm font-medium text-purple-100 mt-2 flex items-center gap-2">
                                     <span className="w-2 h-2 bg-purple-300 rounded-full animate-pulse" />
-                                    Upcoming and completed
+                                    {periodLabel}
                                 </p>
                                 <div className="mt-4">
                                     <Button variant="secondary" size="sm" className="w-full bg-white/20 hover:bg-white/30 text-white border-white/30">
@@ -194,7 +201,7 @@ export default async function DashboardPage() {
                                 <div className="text-5xl font-extrabold tracking-tight mt-2">{assignmentsCount}</div>
                                 <p className="text-sm font-medium text-orange-100 mt-2 flex items-center gap-2">
                                     <span className="w-2 h-2 bg-orange-300 rounded-full animate-pulse" />
-                                    Assignments & Lab Records
+                                    {periodLabel}
                                 </p>
                                 <div className="mt-4">
                                     <Button variant="secondary" size="sm" className="w-full bg-white/20 hover:bg-white/30 text-white border-white/30">
@@ -221,7 +228,7 @@ export default async function DashboardPage() {
                                 <div className="text-5xl font-extrabold tracking-tight mt-2">{extraClassesCount}</div>
                                 <p className="text-sm font-medium text-emerald-100 mt-2 flex items-center gap-2">
                                     <span className="w-2 h-2 bg-emerald-300 rounded-full animate-pulse" />
-                                    Additional sessions
+                                    {periodLabel}
                                 </p>
                                 <div className="mt-4">
                                     <Button variant="secondary" size="sm" className="w-full bg-white/20 hover:bg-white/30 text-white border-white/30">
@@ -248,7 +255,7 @@ export default async function DashboardPage() {
                                 <div className="text-5xl font-extrabold tracking-tight mt-2">{theoryCount + practicalCount}</div>
                                 <p className="text-sm font-medium text-indigo-100 mt-2 flex items-center gap-2">
                                     <span className="w-2 h-2 bg-indigo-300 rounded-full animate-pulse" />
-                                    Theory: {theoryCount} | Practical: {practicalCount}
+                                    Theory: {theoryCount} | Practical: {practicalCount} · {periodLabel}
                                 </p>
                                 <div className="mt-4">
                                     <Button variant="secondary" size="sm" className="w-full bg-white/20 hover:bg-white/30 text-white border-white/30">
@@ -275,7 +282,7 @@ export default async function DashboardPage() {
                                 <div className="text-5xl font-extrabold tracking-tight mt-2">{totalWorkloadPeriods}</div>
                                 <p className="text-sm font-medium text-cyan-100 mt-2 flex items-center gap-2">
                                     <span className="w-2 h-2 bg-cyan-300 rounded-full animate-pulse" />
-                                    Total periods for {academicYear}, {semesterType}
+                                    Total periods · {periodLabel}
                                 </p>
                                 <div className="mt-4">
                                     <Button variant="secondary" size="sm" className="w-full bg-white/20 hover:bg-white/30 text-white border-white/30">
