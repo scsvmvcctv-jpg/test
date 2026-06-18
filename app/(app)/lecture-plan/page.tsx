@@ -51,6 +51,8 @@ type LecturePlan = {
     topic: string
     actual_completion_date: string | null
     remarks: string
+    academic_year?: string | null
+    semester_type?: string | null
 }
 
 type SubjectItem = {
@@ -148,6 +150,21 @@ export default function LecturePlanPage() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [academicYear, semesterType])
 
+    useEffect(() => {
+        const refetchPlans = async () => {
+            const { data: { user } } = await supabase.auth.getUser()
+            if (user) {
+                await fetchLecturePlans(user.id, academicYear, semesterType)
+            }
+        }
+
+        if (userProfile) {
+            refetchPlans()
+            setSelectedIds(new Set())
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [academicYear, semesterType, userProfile])
+
     const initializeData = async () => {
         setLoading(true)
         setLoadingSubjects(true)
@@ -203,7 +220,7 @@ export default function LecturePlanPage() {
         }
 
         // Fetch Lecture Plans
-        await fetchLecturePlans(user.id)
+        await fetchLecturePlans(user.id, yearForSubjects, semesterType)
 
         setLoading(false)
         setLoadingSubjects(false)
@@ -316,24 +333,44 @@ export default function LecturePlanPage() {
         }
     }
 
-    const fetchLecturePlans = async (userId: string) => {
-        const { data } = await supabase
+    const fetchLecturePlans = async (
+        userId: string,
+        year: string = academicYear,
+        semester: string = semesterType
+    ) => {
+        let query = supabase
             .from('lecture_plans')
             .select('*')
             .eq('staff_id', userId)
-            .order('proposed_date', { ascending: true })
+            .eq('academic_year', year)
+
+        if (semester !== 'All') {
+            query = query.eq('semester_type', semester)
+        }
+
+        const { data, error } = await query.order('proposed_date', { ascending: true })
+
+        if (error) {
+            console.error('Failed to fetch lecture plans', error)
+            setData([])
+            return
+        }
 
         if (data) setData(data)
     }
 
     const reloadData = async () => {
         const { data: { user } } = await supabase.auth.getUser()
-        if (user) await fetchLecturePlans(user.id)
+        if (user) await fetchLecturePlans(user.id, academicYear, semesterType)
     }
 
     const handleSave = async (e: React.FormEvent) => {
         e.preventDefault()
         if (blockIfLocked()) return
+        if (semesterType === 'All') {
+            alert('Please select Odd or Even semester before saving.')
+            return
+        }
         const { data: { user } } = await supabase.auth.getUser()
         if (!user) return
 
@@ -379,6 +416,8 @@ export default function LecturePlanPage() {
             staff_id: user.id,
             proposed_date: proposedDate || null,
             actual_completion_date: actualDate,
+            academic_year: academicYear,
+            semester_type: semesterType,
         }
 
         // Only include unit_no if it's provided (not null/undefined)
@@ -488,6 +527,10 @@ export default function LecturePlanPage() {
 
     const handleImportClick = () => {
         if (blockIfLocked()) return
+        if (semesterType === 'All') {
+            alert('Please select Odd or Even semester before importing CSV.')
+            return
+        }
         if (!selectedSubject) {
             alert('Please select a subject from the dropdown before importing CSV.')
             return
@@ -558,6 +601,8 @@ export default function LecturePlanPage() {
                         staff_id: user.id,
                         subject: importSubjectName,
                         section: importSection,
+                        academic_year: academicYear,
+                        semester_type: semesterType,
                         period_no: parseInt(row.period_no || row.Period || '0'),
                         proposed_date: proposedDate,
                         topic: row.topic || row.Topic,
@@ -1074,6 +1119,10 @@ export default function LecturePlanPage() {
 
     const handleAddItem = () => {
         if (blockIfLocked()) return
+        if (semesterType === 'All') {
+            alert('Please select Odd or Even semester before adding an entry.')
+            return
+        }
         if (!selectedSubject) {
             alert('Please select a subject from the dropdown before adding an entry.')
             return

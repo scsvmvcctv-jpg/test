@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation' // Import useRouter
 import { createClient } from '@/lib/supabase/client'
 import { DataTable } from '@/components/DataTable'
@@ -28,6 +28,13 @@ import {
     SelectValue,
 } from '@/components/ui/select'
 import { InspectionSubmissionReport } from '@/components/admin/InspectionSubmissionReport'
+import {
+    DEFAULT_ACADEMIC_YEAR,
+    DEFAULT_SEMESTER_TYPE,
+    filterRecordsByPeriod,
+    getAcademicYearOptions,
+    resolveAcademicYear,
+} from '@/lib/academic-years'
 
 function normalizeDepartmentName(name?: string | null) {
     return (name || '').replace(/,\s*$/, '').trim()
@@ -61,7 +68,15 @@ type StaffSummary = {
 }
 
 export default function AdminPage() {
-    const [data, setData] = useState<StaffSummary[]>([])
+    const [profiles, setProfiles] = useState<{
+        id: string
+        full_name?: string | null
+        email?: string | null
+        department_name?: string | null
+        department?: string | null
+        designation_name?: string | null
+        designation?: string | null
+    }[]>([])
     const [loading, setLoading] = useState(true)
     const [selectedStaff, setSelectedStaff] = useState<StaffSummary | null>(null)
     const [staffDetails, setStaffDetails] = useState<any>({
@@ -97,6 +112,85 @@ export default function AdminPage() {
     const [departmentList, setDepartmentList] = useState<string[]>([])
     const [selectedDepartment, setSelectedDepartment] = useState<string>('')
     const [canSelectDepartment, setCanSelectDepartment] = useState(false)
+    const [academicYear, setAcademicYear] = useState<string>(DEFAULT_ACADEMIC_YEAR)
+    const [academicYearOptions, setAcademicYearOptions] = useState<string[]>([DEFAULT_ACADEMIC_YEAR])
+    const [semesterType, setSemesterType] = useState<string>(DEFAULT_SEMESTER_TYPE)
+
+    const filterByStaff = <T extends { staff_id?: string }>(rows: T[] | null | undefined, staffId: string) =>
+        (rows || []).filter((r) => r.staff_id === staffId)
+
+    const buildStaffSummary = (
+        profileRows: { id: string; full_name?: string | null; email?: string | null; department_name?: string | null; department?: string | null; designation_name?: string | null; designation?: string | null }[],
+        lecturePlans: Record<string, unknown>[],
+        tests: Record<string, unknown>[],
+        assignments: Record<string, unknown>[],
+        extraClasses: Record<string, unknown>[],
+        theoryAssessments: Record<string, unknown>[],
+        practicalAssessments: Record<string, unknown>[],
+        workload: Record<string, unknown>[],
+        inspections: Record<string, unknown>[]
+    ): StaffSummary[] =>
+        profileRows.map((profile) => {
+            const staffId = profile.id
+            const staffLecturePlans = filterByStaff(lecturePlans as { staff_id?: string }[], staffId)
+            const staffTests = filterByStaff(tests as { staff_id?: string }[], staffId)
+            const staffAssignments = filterByStaff(assignments as { staff_id?: string }[], staffId)
+            const staffExtraClasses = filterByStaff(extraClasses as { staff_id?: string }[], staffId)
+            const staffTheory = filterByStaff(theoryAssessments as { staff_id?: string }[], staffId)
+            const staffPractical = filterByStaff(practicalAssessments as { staff_id?: string }[], staffId)
+            const staffWorkload = filterByStaff(workload as { staff_id?: string }[], staffId)
+            const staffInspections = filterByStaff(inspections as { staff_id?: string }[], staffId)
+
+            return {
+                id: profile.id,
+                full_name: profile.full_name || 'N/A',
+                email: profile.email || 'N/A',
+                department: profile.department_name || profile.department || '-',
+                designation: profile.designation_name || profile.designation || '-',
+                lecture_plans_total: staffLecturePlans.length,
+                lecture_plans_completed: staffLecturePlans.filter((r) => Boolean((r as { actual_completion_date?: string | null }).actual_completion_date)).length,
+                tests_count: staffTests.length,
+                assignments_count: staffAssignments.length,
+                extra_classes_count: staffExtraClasses.length,
+                assessments_count: staffTheory.length + staffPractical.length,
+                workload_count: staffWorkload.length,
+                inspections_count: staffInspections.length,
+            }
+        })
+
+    const periodFilteredActivity = useMemo(() => {
+        if (!activityData) return null
+
+        return {
+            ...activityData,
+            inspections: filterRecordsByPeriod(
+                activityData.inspections as { academic_year?: string | null; semester_type?: string | null }[],
+                academicYear,
+                semesterType
+            ),
+            workload: filterRecordsByPeriod(
+                activityData.workload as { academic_year?: string | null; semester_type?: string | null }[],
+                academicYear,
+                semesterType
+            ),
+        }
+    }, [activityData, academicYear, semesterType])
+
+    const data = useMemo<StaffSummary[]>(() => {
+        if (!profiles.length || !periodFilteredActivity) return []
+
+        return buildStaffSummary(
+            profiles,
+            periodFilteredActivity.lecturePlans,
+            periodFilteredActivity.tests,
+            periodFilteredActivity.assignments,
+            periodFilteredActivity.extraClasses,
+            periodFilteredActivity.theory,
+            periodFilteredActivity.practical,
+            periodFilteredActivity.workload,
+            periodFilteredActivity.inspections
+        )
+    }, [profiles, periodFilteredActivity])
 
     useEffect(() => {
         // Check for admin token
@@ -177,52 +271,10 @@ export default function AdminPage() {
     }, [])
 
     useEffect(() => {
-        if (selectedStaff?.id && activityData) {
-            applyStaffDetails(selectedStaff.id)
+        if (selectedStaff?.id && periodFilteredActivity) {
+            applyStaffDetails(selectedStaff.id, periodFilteredActivity)
         }
-    }, [selectedStaff, activityData])
-
-    const filterByStaff = <T extends { staff_id?: string }>(rows: T[] | null | undefined, staffId: string) =>
-        (rows || []).filter((r) => r.staff_id === staffId)
-
-    const buildStaffSummary = (
-        profiles: { id: string; full_name?: string | null; email?: string | null; department_name?: string | null; department?: string | null; designation_name?: string | null; designation?: string | null }[],
-        lecturePlans: Record<string, unknown>[],
-        tests: Record<string, unknown>[],
-        assignments: Record<string, unknown>[],
-        extraClasses: Record<string, unknown>[],
-        theoryAssessments: Record<string, unknown>[],
-        practicalAssessments: Record<string, unknown>[],
-        workload: Record<string, unknown>[],
-        inspections: Record<string, unknown>[]
-    ): StaffSummary[] =>
-        profiles.map((profile) => {
-            const staffId = profile.id
-            const staffLecturePlans = filterByStaff(lecturePlans as { staff_id?: string }[], staffId)
-            const staffTests = filterByStaff(tests as { staff_id?: string }[], staffId)
-            const staffAssignments = filterByStaff(assignments as { staff_id?: string }[], staffId)
-            const staffExtraClasses = filterByStaff(extraClasses as { staff_id?: string }[], staffId)
-            const staffTheory = filterByStaff(theoryAssessments as { staff_id?: string }[], staffId)
-            const staffPractical = filterByStaff(practicalAssessments as { staff_id?: string }[], staffId)
-            const staffWorkload = filterByStaff(workload as { staff_id?: string }[], staffId)
-            const staffInspections = filterByStaff(inspections as { staff_id?: string }[], staffId)
-
-            return {
-                id: profile.id,
-                full_name: profile.full_name || 'N/A',
-                email: profile.email || 'N/A',
-                department: profile.department_name || profile.department || '-',
-                designation: profile.designation_name || profile.designation || '-',
-                lecture_plans_total: staffLecturePlans.length,
-                lecture_plans_completed: staffLecturePlans.filter((r) => Boolean((r as { actual_completion_date?: string | null }).actual_completion_date)).length,
-                tests_count: staffTests.length,
-                assignments_count: staffAssignments.length,
-                extra_classes_count: staffExtraClasses.length,
-                assessments_count: staffTheory.length + staffPractical.length,
-                workload_count: staffWorkload.length,
-                inspections_count: staffInspections.length,
-            }
-        })
+    }, [selectedStaff, periodFilteredActivity])
 
     const fetchData = async (departmentFilter?: string) => {
         setLoading(true)
@@ -279,19 +331,14 @@ export default function AdminPage() {
                 inspections: inspections || [],
             })
 
-            setData(
-                buildStaffSummary(
-                    profiles || [],
-                    lecturePlans || [],
-                    tests || [],
-                    assignments || [],
-                    extraClasses || [],
-                    theory || [],
-                    practical || [],
-                    workload || [],
-                    inspections || []
-                )
+            setProfiles(profiles || [])
+
+            const years = getAcademicYearOptions(
+                null,
+                (inspections || []).map((row: { academic_year?: string | null }) => row.academic_year).filter(Boolean) as string[]
             )
+            setAcademicYearOptions(years)
+            setAcademicYear((current) => resolveAcademicYear(years, current))
         } catch (error: unknown) {
             console.error('Error fetching dashboard data:', error)
             alert(error instanceof Error ? error.message : 'Failed to load dashboard data')
@@ -774,41 +821,79 @@ export default function AdminPage() {
                 </Card>
             )}
 
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-                <h1 className="text-4xl font-extrabold tracking-tight">Admin Dashboard</h1>
-                <div className="flex items-center gap-2">
-                    <Label htmlFor="dept-select" className="text-sm font-medium whitespace-nowrap">Department</Label>
-                    {canSelectDepartment ? (
-                        <Select
-                            value={selectedDepartment || '__ALL__'}
-                            onValueChange={(value) => {
-                                const dept = value === '__ALL__' ? '' : value
-                                setSelectedDepartment(dept)
-                                if (dept) fetchData(dept)
-                                else fetchData()
-                            }}
-                        >
-                            <SelectTrigger id="dept-select" className="w-[280px] bg-background">
-                                <SelectValue placeholder="Select department" />
-                            </SelectTrigger>
-                            <SelectContent>
-                                <SelectItem value="__ALL__">All departments</SelectItem>
-                                {departmentList.map((name) => (
-                                    <SelectItem key={name} value={name}>
-                                        {name}
-                                    </SelectItem>
-                                ))}
-                            </SelectContent>
-                        </Select>
-                    ) : (
-                        <div
-                            id="dept-select"
-                            className="min-w-[280px] rounded-md border bg-muted/40 px-3 py-2 text-sm font-medium"
-                        >
-                            {selectedDepartment || normalizeDepartmentName(adminDetails?.department_name) || '—'}
+            <div className="flex flex-col gap-4">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                    <h1 className="text-4xl font-extrabold tracking-tight">Admin Dashboard</h1>
+                    <div className="flex flex-wrap items-end gap-4">
+                        <div className="grid gap-2">
+                            <Label htmlFor="academic-year-select" className="text-sm font-medium">Academic Year</Label>
+                            <Select value={academicYear} onValueChange={setAcademicYear}>
+                                <SelectTrigger id="academic-year-select" className="w-[140px] bg-background">
+                                    <SelectValue placeholder="Select Year" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    {academicYearOptions.map((year) => (
+                                        <SelectItem key={year} value={year}>
+                                            {year}
+                                        </SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
                         </div>
-                    )}
+
+                        <div className="grid gap-2">
+                            <Label htmlFor="semester-select" className="text-sm font-medium">Semester</Label>
+                            <Select value={semesterType} onValueChange={setSemesterType}>
+                                <SelectTrigger id="semester-select" className="w-[100px] bg-background">
+                                    <SelectValue placeholder="Semester" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="Odd">Odd</SelectItem>
+                                    <SelectItem value="Even">Even</SelectItem>
+                                    <SelectItem value="All">All</SelectItem>
+                                </SelectContent>
+                            </Select>
+                        </div>
+
+                        <div className="grid gap-2">
+                            <Label htmlFor="dept-select" className="text-sm font-medium">Department</Label>
+                            {canSelectDepartment ? (
+                                <Select
+                                    value={selectedDepartment || '__ALL__'}
+                                    onValueChange={(value) => {
+                                        const dept = value === '__ALL__' ? '' : value
+                                        setSelectedDepartment(dept)
+                                        if (dept) fetchData(dept)
+                                        else fetchData()
+                                    }}
+                                >
+                                    <SelectTrigger id="dept-select" className="w-[280px] bg-background">
+                                        <SelectValue placeholder="Select department" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="__ALL__">All departments</SelectItem>
+                                        {departmentList.map((name) => (
+                                            <SelectItem key={name} value={name}>
+                                                {name}
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                            ) : (
+                                <div
+                                    id="dept-select"
+                                    className="min-w-[280px] rounded-md border bg-muted/40 px-3 py-2 text-sm font-medium"
+                                >
+                                    {selectedDepartment || normalizeDepartmentName(adminDetails?.department_name) || '—'}
+                                </div>
+                            )}
+                        </div>
+                    </div>
                 </div>
+                <p className="text-sm text-muted-foreground">
+                    Showing inspection and workload data for Academic Year <span className="font-medium">{academicYear}</span>,{' '}
+                    <span className="font-medium">{semesterType}</span> semester.
+                </p>
             </div>
 
             <div className="grid gap-6 md:grid-cols-3">
@@ -825,11 +910,13 @@ export default function AdminPage() {
                 </Card>
             </div>
 
-            {activityData && (
+            {periodFilteredActivity && (
                 <InspectionSubmissionReport
                     staffList={data}
-                    inspections={activityData.inspections as { staff_id?: string; date?: string; status?: string | null }[]}
+                    inspections={periodFilteredActivity.inspections as { staff_id?: string; date?: string; status?: string | null; academic_year?: string | null; semester_type?: string | null }[]}
                     departmentLabel={selectedDepartment || normalizeDepartmentName(adminDetails?.department_name) || 'department'}
+                    academicYear={academicYear}
+                    semesterType={semesterType}
                     isHodView={!canSelectDepartment}
                 />
             )}

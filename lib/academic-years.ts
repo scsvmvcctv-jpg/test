@@ -48,6 +48,21 @@ export function resolveAcademicYear(
     return years[0] || DEFAULT_ACADEMIC_YEAR
 }
 
+export function filterRecordsByPeriod<T extends { academic_year?: string | null; semester_type?: string | null }>(
+    items: T[] | null | undefined,
+    academicYear: string = DEFAULT_ACADEMIC_YEAR,
+    semesterType: string = DEFAULT_SEMESTER_TYPE
+): T[] {
+    return (items || []).filter((item) => {
+        const year = (item.academic_year || '').trim()
+        const sem = (item.semester_type || '').trim()
+        if (!year || !sem) return false
+        if (academicYear && year !== academicYear) return false
+        if (semesterType === 'All') return true
+        return sem === semesterType
+    })
+}
+
 export function filterWorkloadByPeriod<T extends WorkloadSubjectRow>(
     items: T[],
     academicYear: string = DEFAULT_ACADEMIC_YEAR,

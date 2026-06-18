@@ -183,7 +183,12 @@ function DonutChart({ stats, isHodView = false }: { stats: InspectionReportStats
     )
 }
 
-function exportReportCsv(staffRows: InspectionReportStaff[], departmentLabel: string) {
+function exportReportCsv(
+    staffRows: InspectionReportStaff[],
+    departmentLabel: string,
+    academicYear?: string,
+    semesterType?: string
+) {
     const header = ['Staff Name', 'Designation', 'Department', 'Inspection Date', 'Status']
     const rows = staffRows.map((row) => [
         row.full_name,
@@ -201,7 +206,7 @@ function exportReportCsv(staffRows: InspectionReportStaff[], departmentLabel: st
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = url
-    link.download = `inspection-submission-report-${departmentLabel.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}.csv`
+    link.download = `inspection-submission-report-${departmentLabel.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}${academicYear ? `-${academicYear}` : ''}${semesterType ? `-${semesterType}` : ''}.csv`
     link.click()
     URL.revokeObjectURL(url)
 }
@@ -210,6 +215,8 @@ type InspectionSubmissionReportProps = {
     staffList: StaffRow[]
     inspections: InspectionRecord[]
     departmentLabel?: string
+    academicYear?: string
+    semesterType?: string
     isHodView?: boolean
 }
 
@@ -217,6 +224,8 @@ export function InspectionSubmissionReport({
     staffList,
     inspections,
     departmentLabel = 'department',
+    academicYear,
+    semesterType,
     isHodView = false,
 }: InspectionSubmissionReportProps) {
     const { staffRows, stats } = useMemo(
@@ -291,7 +300,9 @@ export function InspectionSubmissionReport({
                             </div>
                         </div>
                         <p className="text-xs text-muted-foreground">
-                            Status is based on each staff member&apos;s latest inspection record.
+                            Status is based on each staff member&apos;s latest inspection record
+                            {academicYear ? ` for ${academicYear}` : ''}
+                            {semesterType ? ` (${semesterType} semester)` : ''}.
                         </p>
                     </CardContent>
                 </Card>
@@ -313,7 +324,9 @@ export function InspectionSubmissionReport({
                                     ...row,
                                     inspectionStatus: getReportDisplayStatus(row.inspectionStatus, isHodView),
                                 })),
-                                departmentLabel
+                                departmentLabel,
+                                academicYear,
+                                semesterType
                             )
                         }
                         disabled={staffRows.length === 0}
