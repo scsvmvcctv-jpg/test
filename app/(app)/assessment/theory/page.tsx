@@ -1,6 +1,7 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
+import Papa from 'papaparse'
 import { createClient } from '@/lib/supabase/client'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -15,11 +16,19 @@ import {
     DialogHeader,
     DialogTitle,
 } from '@/components/ui/dialog'
-import { AlertCircle, Loader2, Search, Save, CheckSquare, Edit2, X } from 'lucide-react'
+import { AlertCircle, Loader2, Search, Save, CheckSquare, Edit2, X, Upload, Download, Plus, Trash2 } from 'lucide-react'
 import { DEFAULT_ACADEMIC_YEAR, DEFAULT_SEMESTER_TYPE } from '@/lib/academic-years'
 import { fetchFilterOptions, fetchStudentData } from '@/app/actions/assessment'
 import { useInspectionLock } from '@/hooks/use-inspection-lock'
 import { LogbookLockBanner } from '@/components/LogbookLockBanner'
+
+type StudentSource = 'api' | 'import'
+
+type ImportedStudent = {
+    registrationno: string
+    name: string
+    section?: string
+}
 
 type SubjectItem = {
     code: string
@@ -43,6 +52,7 @@ type TheoryAssessment = {
 
 export default function AssessmentTheoryPage() {
     const supabase = createClient()
+    const studentFileInputRef = useRef<HTMLInputElement>(null)
 
     // Filter State
     const [filterOptions, setFilterOptions] = useState<any>(null)
@@ -55,10 +65,14 @@ export default function AssessmentTheoryPage() {
     const [selectedSemester, setSelectedSemester] = useState('2')
     const [selectedMode, setSelectedMode] = useState('')
     const [selectedSection, setSelectedSection] = useState('ALL')
+    const [studentSource, setStudentSource] = useState<StudentSource>('api')
+    const [rosterLoaded, setRosterLoaded] = useState(false)
+    const [loadingRoster, setLoadingRoster] = useState(false)
 
     // Data State
     const [students, setStudents] = useState<any[]>([])
     const [loadingStudents, setLoadingStudents] = useState(false)
+    const [importingStudents, setImportingStudents] = useState(false)
     const [studentError, setStudentError] = useState<string | null>(null)
     const [hasSearched, setHasSearched] = useState(false)
     const [studentMarks, setStudentMarks] = useState<Map<string, TheoryAssessment>>(new Map())
@@ -90,6 +104,10 @@ export default function AssessmentTheoryPage() {
     const [editMode, setEditMode] = useState(false)
     const [editingMarks, setEditingMarks] = useState<Map<string, { internal_1?: number, internal_2?: number, assignment_attendance?: number }>>(new Map())
     const [savingInline, setSavingInline] = useState(false)
+
+    // Add Student Dialog
+    const [addStudentOpen, setAddStudentOpen] = useState(false)
+    const [newStudent, setNewStudent] = useState({ registrationno: '', name: '', section: '' })
 
     // Initial Load - Fetch Filter Options and User Profile
     useEffect(() => {
@@ -320,6 +338,117 @@ export default function AssessmentTheoryPage() {
         }
     }
 
+    const resetStudentListState = () => {
+        setStudents([])
+        setSelectedStudents(new Set())
+        setSelectedSection('ALL')
+        setStudentMarks(new Map())
+        setEditMode(false)
+        setEditingMarks(new Map())
+        setRosterLoaded(false)
+    }
+
+    const mapRosterRows = (rows: Array<{ registrationno: string; student_name: string; section?: string | null }>): ImportedStudent[] =>
+        rows.map((row) => ({
+            registrationno: row.registrationno,
+            name: row.student_name,
+            section: row.section || undefined,
+        }))
+
+    const loadSavedRoster = async (subject: string) => {
+        if (!subject) return false
+
+        const { data: { user } } = await supabase.auth.getUser()
+        if (!user) return false
+
+        setLoadingRoster(true)
+        setStudentError(null)
+
+        const { data, error } = await supabase
+            .from('assessment_theory_roster')
+            .select('registrationno, student_name, section')
+            .eq('staff_id', user.id)
+            .eq('subject', subject)
+            .eq('academic_year', academicYear)
+            .eq('semester_type', semesterType)
+            .order('registrationno', { ascending: true })
+
+        if (error) {
+            console.error('Failed to load saved roster', error)
+            setLoadingRoster(false)
+            return false
+        }
+
+        if (data && data.length > 0) {
+            setStudentSource('import')
+            setStudents(mapRosterRows(data))
+            setHasSearched(true)
+            setRosterLoaded(true)
+            setSelectedStudents(new Set())
+            setSelectedSection('ALL')
+            setLoadingRoster(false)
+            return true
+        }
+
+        setLoadingRoster(false)
+        return false
+    }
+
+    const saveRoster = async (studentList: ImportedStudent[]) => {
+        if (!selectedSubject) return
+
+        const { data: { user } } = await supabase.auth.getUser()
+        if (!user) return
+
+        await supabase
+            .from('assessment_theory_roster')
+            .delete()
+            .eq('staff_id', user.id)
+            .eq('subject', selectedSubject)
+            .eq('academic_year', academicYear)
+            .eq('semester_type', semesterType)
+
+        if (studentList.length === 0) {
+            setRosterLoaded(false)
+            return
+        }
+
+        const rows = studentList.map((student) => ({
+            staff_id: user.id,
+            subject: selectedSubject,
+            academic_year: academicYear,
+            semester_type: semesterType,
+            registrationno: student.registrationno,
+            student_name: student.name,
+            section: student.section || null,
+        }))
+
+        const { error } = await supabase.from('assessment_theory_roster').insert(rows)
+        if (error) {
+            console.error('Failed to save roster', error)
+            alert('Could not save student list: ' + error.message)
+            return
+        }
+
+        setRosterLoaded(true)
+    }
+
+    const handleSubjectChange = (subject: string) => {
+        setSelectedSubject(subject)
+        setStudentError(null)
+        resetStudentListState()
+        setHasSearched(false)
+    }
+
+    const hasStudentList = hasSearched && students.length > 0
+    const showImportSetup = studentSource === 'import' && !hasStudentList && !loadingRoster
+
+    useEffect(() => {
+        if (!selectedSubject) return
+        void loadSavedRoster(selectedSubject)
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [academicYear, semesterType, selectedSubject])
+
     const handleSearch = async () => {
         if (!selectedSubject) {
             setStudentError('Please select a subject.')
@@ -339,9 +468,7 @@ export default function AssessmentTheoryPage() {
         setLoadingStudents(true)
         setStudentError(null)
         setHasSearched(true)
-        setStudents([])
-        setSelectedSection('ALL')
-        setStudentMarks(new Map())
+        resetStudentListState()
 
         const result = await fetchStudentData({
             academicYear: year,
@@ -360,6 +487,124 @@ export default function AssessmentTheoryPage() {
             setStudentError(result.error)
         }
         setLoadingStudents(false)
+    }
+
+    const downloadStudentSample = () => {
+        const csvContent = 'registrationno,name,section\n11199A001,Student Name One,A\n11199A002,Student Name Two,B'
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
+        const link = document.createElement('a')
+        const url = URL.createObjectURL(blob)
+        link.setAttribute('href', url)
+        link.setAttribute('download', 'theory_students_sample.csv')
+        link.style.visibility = 'hidden'
+        document.body.appendChild(link)
+        link.click()
+        document.body.removeChild(link)
+        URL.revokeObjectURL(url)
+    }
+
+    const handleStudentImportClick = () => {
+        if (!selectedSubject) {
+            alert('Please select a subject before importing students.')
+            return
+        }
+        studentFileInputRef.current?.click()
+    }
+
+    const handleStudentFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+        const file = event.target.files?.[0]
+        if (!file) return
+
+        if (!selectedSubject) {
+            alert('Please select a subject before importing students.')
+            if (studentFileInputRef.current) studentFileInputRef.current.value = ''
+            return
+        }
+
+        setImportingStudents(true)
+        setStudentError(null)
+
+        Papa.parse(file, {
+            header: true,
+            skipEmptyLines: true,
+            complete: (results) => {
+                const fileHeaders = results.meta?.fields ?? []
+                const normalized = fileHeaders.map((h) => String(h).trim().toLowerCase())
+                const hasRegister = normalized.some((h) =>
+                    ['registrationno', 'register_no', 'register_number', 'reg_no', 'student_id', 'studentid'].includes(h)
+                )
+                const hasName = normalized.some((h) => ['name', 'student_name', 'studentname'].includes(h))
+
+                if (!hasRegister || !hasName) {
+                    alert(
+                        'Invalid CSV format.\n\nExpected columns: registrationno, name, section (optional)\n\nDownload the sample CSV and use that format.'
+                    )
+                    setImportingStudents(false)
+                    if (studentFileInputRef.current) studentFileInputRef.current.value = ''
+                    return
+                }
+
+                const rows = results.data as any[]
+                const imported = rows
+                    .map((row) => {
+                        const registrationno = String(
+                            row.registrationno ||
+                                row.RegisterNo ||
+                                row.register_no ||
+                                row.Register_No ||
+                                row.register_number ||
+                                row.reg_no ||
+                                row.RegNo ||
+                                row.student_id ||
+                                row.StudentId ||
+                                row.StudentID ||
+                                ''
+                        ).trim()
+                        const name = String(
+                            row.name || row.Name || row.student_name || row.StudentName || row.Student_Name || ''
+                        ).trim()
+                        const section = String(
+                            row.section || row.Section || row.sec || row.Sec || ''
+                        ).trim()
+
+                        if (!registrationno || !name) return null
+                        return {
+                            registrationno,
+                            name,
+                            section: section || undefined,
+                        }
+                    })
+                    .filter(Boolean) as Array<{ registrationno: string; name: string; section?: string }>
+
+                // Keep first occurrence when register numbers repeat
+                const unique = new Map<string, { registrationno: string; name: string; section?: string }>()
+                imported.forEach((student) => {
+                    if (!unique.has(student.registrationno)) {
+                        unique.set(student.registrationno, student)
+                    }
+                })
+                const uniqueStudents = Array.from(unique.values())
+
+                if (uniqueStudents.length === 0) {
+                    alert('No valid student rows found. Each row needs registrationno and name.')
+                    setImportingStudents(false)
+                    if (studentFileInputRef.current) studentFileInputRef.current.value = ''
+                    return
+                }
+
+                resetStudentListState()
+                setHasSearched(true)
+                setStudents(uniqueStudents)
+                setImportingStudents(false)
+                if (studentFileInputRef.current) studentFileInputRef.current.value = ''
+                void saveRoster(uniqueStudents)
+            },
+            error: (error) => {
+                alert('Error parsing CSV: ' + error.message)
+                setImportingStudents(false)
+                if (studentFileInputRef.current) studentFileInputRef.current.value = ''
+            },
+        })
     }
 
     // Fetch marks when subject or students change
@@ -400,6 +645,85 @@ export default function AssessmentTheoryPage() {
         } else {
             setSelectedStudents(new Set(filteredStudents.map(s => s.registrationno)))
         }
+    }
+
+    const openAddStudentDialog = () => {
+        if (!selectedSubject) {
+            alert('Please select a subject first.')
+            return
+        }
+        setNewStudent({ registrationno: '', name: '', section: '' })
+        setAddStudentOpen(true)
+    }
+
+    const handleAddStudent = () => {
+        const registrationno = newStudent.registrationno.trim()
+        const name = newStudent.name.trim()
+        const section = newStudent.section.trim()
+
+        if (!registrationno || !name) {
+            alert('Register number and student name are required.')
+            return
+        }
+
+        if (students.some((s) => String(s.registrationno).toLowerCase() === registrationno.toLowerCase())) {
+            alert('A student with this register number is already in the list.')
+            return
+        }
+
+        setHasSearched(true)
+        const nextStudents = [
+            ...students,
+            {
+                registrationno,
+                name,
+                section: section || undefined,
+            },
+        ]
+        setStudents(nextStudents)
+        setAddStudentOpen(false)
+        setNewStudent({ registrationno: '', name: '', section: '' })
+        void saveRoster(nextStudents)
+    }
+
+    const handleDeleteSelectedStudents = () => {
+        if (editMode) return
+        if (selectedStudents.size === 0) {
+            alert('Please select at least one student to delete.')
+            return
+        }
+        if (!confirm(`Remove ${selectedStudents.size} selected student(s) from this list?`)) {
+            return
+        }
+
+        setStudents((prev) => prev.filter((s) => !selectedStudents.has(s.registrationno)))
+        setStudentMarks((prev) => {
+            const next = new Map(prev)
+            selectedStudents.forEach((regNo) => next.delete(regNo))
+            return next
+        })
+        const nextStudents = students.filter((s) => !selectedStudents.has(s.registrationno))
+        setSelectedStudents(new Set())
+        void saveRoster(nextStudents)
+    }
+
+    const handleDeleteStudent = (registrationNo: string) => {
+        if (editMode || isLocked) return
+        if (!confirm(`Remove student ${registrationNo} from this list?`)) return
+
+        const nextStudents = students.filter((s) => s.registrationno !== registrationNo)
+        setStudents(nextStudents)
+        setSelectedStudents((prev) => {
+            const next = new Set(prev)
+            next.delete(registrationNo)
+            return next
+        })
+        setStudentMarks((prev) => {
+            const next = new Map(prev)
+            next.delete(registrationNo)
+            return next
+        })
+        void saveRoster(nextStudents)
     }
 
     const handleOpenAssessmentDialog = () => {
@@ -672,16 +996,57 @@ export default function AssessmentTheoryPage() {
                 </Card>
             )}
 
-            {/* Filter Students - Subject dropdown only (year 2025-2026, even sem 2,4,6,8 used internally) */}
+            {/* Subject / student setup — import UI only shown until a roster exists */}
+            {hasStudentList && studentSource === 'import' ? (
+                <Card className="border-t-4 border-t-indigo-500 shadow-md">
+                    <CardContent className="pt-6">
+                        <div className="flex flex-col sm:flex-row sm:items-end gap-4 justify-between">
+                            <div className="space-y-2 flex-1 min-w-[240px] max-w-md">
+                                <label className="text-sm font-medium">Subject</label>
+                                <Select
+                                    value={selectedSubject}
+                                    onValueChange={handleSubjectChange}
+                                    disabled={loadingSubjects || subjects.length === 0}
+                                >
+                                    <SelectTrigger>
+                                        <SelectValue placeholder={loadingSubjects ? 'Loading...' : 'Select Subject'} />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        {subjects.map((subject) => (
+                                            <SelectItem key={subject.displayName} value={subject.displayName}>
+                                                {subject.displayName}
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                            </div>
+                            <p className="text-sm text-gray-500">
+                                {students.length} student(s) saved for this subject
+                            </p>
+                        </div>
+                    </CardContent>
+                </Card>
+            ) : (
             <Card className="border-t-4 border-t-indigo-500 shadow-md">
                 <CardHeader>
                     <CardTitle className="text-lg flex items-center gap-2">
                         <Search className="w-5 h-5 text-indigo-500" />
                         Filter Students
                     </CardTitle>
-                    <CardDescription>Select subject, course, semester, and mode to fetch student list.</CardDescription>
+                    <CardDescription>
+                        {showImportSetup
+                            ? 'Select subject and import students once. The list will be saved and shown automatically next time.'
+                            : 'Choose how to load students: university list (current) or import register number and name from CSV.'}
+                    </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
+                    {loadingRoster && (
+                        <div className="p-3 text-sm text-indigo-700 bg-indigo-50 border border-indigo-100 rounded-md flex items-center gap-2">
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                            Loading saved student list...
+                        </div>
+                    )}
+
                     {filterError && (
                         <div className="p-3 text-sm text-red-600 bg-red-50 border border-red-100 rounded-md flex items-center gap-2">
                             <AlertCircle className="w-4 h-4" />
@@ -689,10 +1054,45 @@ export default function AssessmentTheoryPage() {
                         </div>
                     )}
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                        {!hasStudentList && (
+                            <div className="space-y-2">
+                                <label className="text-sm font-medium">Student Source</label>
+                                <Select
+                                    value={studentSource}
+                                    onValueChange={async (value) => {
+                                        const source = value as StudentSource
+                                        setStudentSource(source)
+                                        setStudentError(null)
+                                        if (source === 'api') {
+                                            setHasSearched(false)
+                                            resetStudentListState()
+                                        } else if (selectedSubject) {
+                                            const loaded = await loadSavedRoster(selectedSubject)
+                                            if (!loaded) {
+                                                setHasSearched(false)
+                                                resetStudentListState()
+                                            }
+                                        } else {
+                                            setHasSearched(false)
+                                            resetStudentListState()
+                                        }
+                                    }}
+                                >
+                                    <SelectTrigger>
+                                        <SelectValue placeholder="Select source" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="api">University list (current)</SelectItem>
+                                        <SelectItem value="import">Import CSV (Register No + Name)</SelectItem>
+                                    </SelectContent>
+                                </Select>
+                            </div>
+                        )}
+
                         <div className="space-y-2">
                             <label className="text-sm font-medium">Subject</label>
-                            <Select value={selectedSubject} onValueChange={setSelectedSubject} disabled={loadingSubjects || subjects.length === 0}>
+                            <Select value={selectedSubject} onValueChange={handleSubjectChange} disabled={loadingSubjects || subjects.length === 0}>
                                 <SelectTrigger>
                                     <SelectValue placeholder={loadingSubjects ? "Loading..." : subjects.length === 0 ? "No subjects" : "Select Subject"} />
                                 </SelectTrigger>
@@ -706,75 +1106,128 @@ export default function AssessmentTheoryPage() {
                             </Select>
                         </div>
 
-                        <div className="space-y-2">
-                            <label className="text-sm font-medium">Course</label>
-                            <Select value={selectedCourse} onValueChange={setSelectedCourse} disabled={loadingFilters}>
-                                <SelectTrigger>
-                                    <SelectValue placeholder="Select Course" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    {filterOptions?.courses?.map((course: any, idx: number) => (
-                                        <SelectItem key={idx} value={course.CourseName ?? course}>
-                                            {course.CourseName ?? course}
-                                        </SelectItem>
-                                    ))}
-                                    {!filterOptions?.courses?.length && <SelectItem value="BE">BE (Fallback)</SelectItem>}
-                                </SelectContent>
-                            </Select>
-                        </div>
+                        {studentSource === 'api' && (
+                            <>
+                                <div className="space-y-2">
+                                    <label className="text-sm font-medium">Course</label>
+                                    <Select value={selectedCourse} onValueChange={setSelectedCourse} disabled={loadingFilters}>
+                                        <SelectTrigger>
+                                            <SelectValue placeholder="Select Course" />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            {filterOptions?.courses?.map((course: any, idx: number) => (
+                                                <SelectItem key={idx} value={course.CourseName ?? course}>
+                                                    {course.CourseName ?? course}
+                                                </SelectItem>
+                                            ))}
+                                            {!filterOptions?.courses?.length && <SelectItem value="BE">BE (Fallback)</SelectItem>}
+                                        </SelectContent>
+                                    </Select>
+                                </div>
 
-                        <div className="space-y-2">
-                            <label className="text-sm font-medium">Semester</label>
-                            <Select value={selectedSemester} onValueChange={setSelectedSemester} disabled={loadingFilters}>
-                                <SelectTrigger>
-                                    <SelectValue placeholder="Select Sem" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    {[1, 2, 3, 4, 5, 6, 7, 8].map((sem) => (
-                                        <SelectItem key={sem} value={sem.toString()}>
-                                            Sem {sem}
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                        </div>
+                                <div className="space-y-2">
+                                    <label className="text-sm font-medium">Semester</label>
+                                    <Select value={selectedSemester} onValueChange={setSelectedSemester} disabled={loadingFilters}>
+                                        <SelectTrigger>
+                                            <SelectValue placeholder="Select Sem" />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            {[1, 2, 3, 4, 5, 6, 7, 8].map((sem) => (
+                                                <SelectItem key={sem} value={sem.toString()}>
+                                                    Sem {sem}
+                                                </SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                </div>
 
-                        <div className="space-y-2">
-                            <label className="text-sm font-medium">Mode</label>
-                            <Select value={selectedMode} onValueChange={setSelectedMode} disabled={loadingFilters}>
-                                <SelectTrigger>
-                                    <SelectValue placeholder="Select Mode" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    {filterOptions?.modes?.map((mode: any, idx: number) => (
-                                        <SelectItem key={idx} value={mode.ModeName ?? mode}>
-                                            {mode.ModeName ?? mode}
-                                        </SelectItem>
-                                    ))}
-                                    {!filterOptions?.modes?.length && <SelectItem value="Regular">Regular (Fallback)</SelectItem>}
-                                </SelectContent>
-                            </Select>
-                        </div>
+                                <div className="space-y-2">
+                                    <label className="text-sm font-medium">Mode</label>
+                                    <Select value={selectedMode} onValueChange={setSelectedMode} disabled={loadingFilters}>
+                                        <SelectTrigger>
+                                            <SelectValue placeholder="Select Mode" />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            {filterOptions?.modes?.map((mode: any, idx: number) => (
+                                                <SelectItem key={idx} value={mode.ModeName ?? mode}>
+                                                    {mode.ModeName ?? mode}
+                                                </SelectItem>
+                                            ))}
+                                            {!filterOptions?.modes?.length && <SelectItem value="Regular">Regular (Fallback)</SelectItem>}
+                                        </SelectContent>
+                                    </Select>
+                                </div>
+                            </>
+                        )}
                     </div>
 
-                    <div className="flex justify-end pt-2">
-                        <Button
-                            onClick={handleSearch}
-                            disabled={loadingStudents || loadingFilters || !selectedSubject || !selectedCourse || !selectedSemester}
-                            className="bg-indigo-600 hover:bg-indigo-700 w-full md:w-auto"
-                        >
-                            {loadingStudents ? (
-                                <>
-                                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                                    Fetching Data...
-                                </>
-                            ) : (
-                                'Get Student Details'
-                            )}
-                        </Button>
-                    </div>
+                    {studentSource === 'api' ? (
+                        <div className="flex justify-end pt-2">
+                            <Button
+                                onClick={handleSearch}
+                                disabled={loadingStudents || loadingFilters || !selectedSubject || !selectedCourse || !selectedSemester}
+                                className="bg-indigo-600 hover:bg-indigo-700 w-full md:w-auto"
+                            >
+                                {loadingStudents ? (
+                                    <>
+                                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                        Fetching Data...
+                                    </>
+                                ) : (
+                                    'Get Student Details'
+                                )}
+                            </Button>
+                        </div>
+                    ) : showImportSetup ? (
+                        <div className="flex flex-col sm:flex-row gap-2 justify-end pt-2">
+                            <Button
+                                type="button"
+                                variant="outline"
+                                onClick={downloadStudentSample}
+                            >
+                                <Download className="mr-2 h-4 w-4" />
+                                Sample CSV
+                            </Button>
+                            <Button
+                                type="button"
+                                variant="outline"
+                                onClick={openAddStudentDialog}
+                                disabled={!selectedSubject || isLocked}
+                            >
+                                <Plus className="mr-2 h-4 w-4" />
+                                Add Student
+                            </Button>
+                            <Button
+                                type="button"
+                                onClick={handleStudentImportClick}
+                                disabled={importingStudents || !selectedSubject}
+                                className="bg-indigo-600 hover:bg-indigo-700"
+                            >
+                                {importingStudents ? (
+                                    <>
+                                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                        Importing...
+                                    </>
+                                ) : (
+                                    <>
+                                        <Upload className="mr-2 h-4 w-4" />
+                                        Import Students CSV
+                                    </>
+                                )}
+                            </Button>
+                        </div>
+                    ) : null}
                 </CardContent>
             </Card>
+            )}
+
+            <input
+                ref={studentFileInputRef}
+                type="file"
+                accept=".csv,text/csv"
+                className="hidden"
+                onChange={handleStudentFileUpload}
+            />
 
             {/* Results Table */}
             {hasSearched && (
@@ -791,13 +1244,27 @@ export default function AssessmentTheoryPage() {
                                     )}
                                 </CardTitle>
                                 <CardDescription>
-                                    Found {students.length} students for {selectedCourse} - Sem {selectedSemester} ({selectedYear})
+                                    {studentSource === 'import'
+                                        ? `${students.length} student(s) for ${selectedSubject || 'selected subject'}`
+                                        : `Found ${students.length} students for ${selectedCourse} - Sem ${selectedSemester} (${selectedYear})`}
                                     {selectedStudents.size > 0 && ` • ${selectedStudents.size} selected`}
                                     {editMode && ' • Enter marks in the table below'}
                                 </CardDescription>
                             </div>
 
-                            <div className="flex gap-2">
+                            <div className="flex flex-wrap gap-2">
+                                {studentSource === 'import' && rosterLoaded && !editMode && !isLocked && (
+                                    <Button
+                                        variant="outline"
+                                        onClick={handleStudentImportClick}
+                                        size="sm"
+                                        disabled={importingStudents}
+                                    >
+                                        <Upload className="mr-2 h-4 w-4" />
+                                        Re-import CSV
+                                    </Button>
+                                )}
+
                                 {/* Client-side Section Filter */}
                                 {students.length > 0 && (
                                     <div className="w-[200px]">
@@ -822,6 +1289,31 @@ export default function AssessmentTheoryPage() {
                                             </SelectContent>
                                         </Select>
                                     </div>
+                                )}
+
+                                {/* Add Student */}
+                                {!editMode && !isLocked && selectedSubject && (
+                                    <Button
+                                        variant="outline"
+                                        onClick={openAddStudentDialog}
+                                        size="sm"
+                                    >
+                                        <Plus className="mr-2 h-4 w-4" />
+                                        Add
+                                    </Button>
+                                )}
+
+                                {/* Delete Selected */}
+                                {selectedStudents.size > 0 && !editMode && !isLocked && (
+                                    <Button
+                                        variant="outline"
+                                        onClick={handleDeleteSelectedStudents}
+                                        size="sm"
+                                        className="text-red-600 border-red-200 hover:bg-red-50 hover:text-red-700"
+                                    >
+                                        <Trash2 className="mr-2 h-4 w-4" />
+                                        Delete ({selectedStudents.size})
+                                    </Button>
                                 )}
 
                                 {/* Select All Button */}
@@ -902,8 +1394,14 @@ export default function AssessmentTheoryPage() {
                                 <p className="text-sm mt-1">{studentError}</p>
                             </div>
                         ) : students.length === 0 ? (
-                            <div className="text-center py-10 text-gray-500">
-                                No students found matching the selected criteria.
+                            <div className="text-center py-10 text-gray-500 space-y-3">
+                                <p>No students in the list yet.</p>
+                                {!isLocked && selectedSubject && (
+                                    <Button variant="outline" onClick={openAddStudentDialog}>
+                                        <Plus className="mr-2 h-4 w-4" />
+                                        Add Student
+                                    </Button>
+                                )}
                             </div>
                         ) : (
                             <div className="border rounded-md overflow-hidden">
@@ -928,6 +1426,7 @@ export default function AssessmentTheoryPage() {
                                             <TableHead className="text-center">Internal Test 2<br />(15)</TableHead>
                                             <TableHead className="text-center">Assignment &<br />Attendance (10)</TableHead>
                                             <TableHead className="text-center font-semibold">Total<br />(40)</TableHead>
+                                            <TableHead className="w-[70px] text-center">Actions</TableHead>
                                         </TableRow>
                                     </TableHeader>
                                     <TableBody>
@@ -1029,6 +1528,19 @@ export default function AssessmentTheoryPage() {
                                                                 ? marks.total.toFixed(2) 
                                                                 : '-'}
                                                         </TableCell>
+                                                        <TableCell className="text-center">
+                                                            <Button
+                                                                type="button"
+                                                                variant="ghost"
+                                                                size="sm"
+                                                                className="h-8 w-8 p-0 text-red-600 hover:text-red-700 hover:bg-red-50"
+                                                                disabled={editMode || isLocked}
+                                                                onClick={() => handleDeleteStudent(student.registrationno)}
+                                                                title="Remove student"
+                                                            >
+                                                                <Trash2 className="h-4 w-4" />
+                                                            </Button>
+                                                        </TableCell>
                                                     </TableRow>
                                                 )
                                             })}
@@ -1039,6 +1551,53 @@ export default function AssessmentTheoryPage() {
                     </CardContent>
                 </Card>
             )}
+
+            {/* Add Student Dialog */}
+            <Dialog open={addStudentOpen} onOpenChange={setAddStudentOpen}>
+                <DialogContent className="sm:max-w-[420px]">
+                    <DialogHeader>
+                        <DialogTitle>Add Student</DialogTitle>
+                    </DialogHeader>
+                    <div className="space-y-4 py-2">
+                        <div className="space-y-2">
+                            <Label htmlFor="new-reg-no">Register Number</Label>
+                            <Input
+                                id="new-reg-no"
+                                placeholder="e.g. 11199A001"
+                                value={newStudent.registrationno}
+                                onChange={(e) => setNewStudent({ ...newStudent, registrationno: e.target.value })}
+                            />
+                        </div>
+                        <div className="space-y-2">
+                            <Label htmlFor="new-student-name">Student Name</Label>
+                            <Input
+                                id="new-student-name"
+                                placeholder="Student full name"
+                                value={newStudent.name}
+                                onChange={(e) => setNewStudent({ ...newStudent, name: e.target.value })}
+                            />
+                        </div>
+                        <div className="space-y-2">
+                            <Label htmlFor="new-section">Section (optional)</Label>
+                            <Input
+                                id="new-section"
+                                placeholder="e.g. A"
+                                value={newStudent.section}
+                                onChange={(e) => setNewStudent({ ...newStudent, section: e.target.value })}
+                            />
+                        </div>
+                        <div className="flex justify-end gap-2 pt-2">
+                            <Button type="button" variant="outline" onClick={() => setAddStudentOpen(false)}>
+                                Cancel
+                            </Button>
+                            <Button type="button" onClick={handleAddStudent} className="bg-indigo-600 hover:bg-indigo-700">
+                                <Plus className="mr-2 h-4 w-4" />
+                                Add Student
+                            </Button>
+                        </div>
+                    </div>
+                </DialogContent>
+            </Dialog>
 
             {/* Assessment Dialog */}
             <Dialog open={assessmentDialogOpen} onOpenChange={setAssessmentDialogOpen}>
