@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
-
-const API_BASE_URL = process.env.API_BASE_URL || '';
+import { getApiBaseUrl } from '@/lib/utils';
 
 export async function GET(req: Request) {
     try {
@@ -31,7 +30,7 @@ export async function GET(req: Request) {
         }
 
         // 4. Proxy Request (send both Dept and DepartmentNo for backend compatibility)
-        const targetUrl = `${API_BASE_URL}/api/facultyworkload?EmpId=${EmpId}&Dept=${Dept}&DepartmentNo=${Dept}`;
+        const targetUrl = `${getApiBaseUrl()}/api/facultyworkload?EmpId=${EmpId}&Dept=${Dept}&DepartmentNo=${Dept}`;
 
         console.log(`Proxying request to: ${targetUrl}`);
 

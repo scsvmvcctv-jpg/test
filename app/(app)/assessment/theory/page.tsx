@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react'
 import Papa from 'papaparse'
+import * as XLSX from 'xlsx'
 import { createClient } from '@/lib/supabase/client'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -24,10 +25,44 @@ import { LogbookLockBanner } from '@/components/LogbookLockBanner'
 
 type StudentSource = 'api' | 'import'
 
+const SECTION_OPTIONS = ['S1', 'S2', 'S3', 'S4', 'S5', 'S6', 'S7', 'S8', 'S9', 'S10', 'A', 'B', 'C', 'D']
+
 type ImportedStudent = {
     registrationno: string
     name: string
     section?: string
+}
+
+type ImportedStudentWithMarks = ImportedStudent & {
+    internal_1?: number | null
+    internal_2?: number | null
+    assignment_attendance?: number | null
+}
+
+function normalizeHeader(value: string) {
+    return String(value || '')
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '')
+}
+
+function parseMarkValue(raw: unknown, max: number): number | null | undefined {
+    if (raw === null || raw === undefined) return undefined
+    const text = String(raw).trim()
+    if (!text) return undefined
+    if (/^(a|ab|absent)$/i.test(text)) return 0
+    const num = Number(text)
+    if (Number.isNaN(num)) return undefined
+    return Math.max(0, Math.min(num, max))
+}
+
+function pickRowValue(row: Record<string, unknown>, aliases: string[]) {
+    const entries = Object.entries(row)
+    for (const alias of aliases) {
+        const found = entries.find(([key]) => normalizeHeader(key) === alias)
+        if (found) return found[1]
+    }
+    return undefined
 }
 
 type SubjectItem = {
@@ -490,12 +525,18 @@ export default function AssessmentTheoryPage() {
     }
 
     const downloadStudentSample = () => {
-        const csvContent = 'registrationno,name,section\n11199A001,Student Name One,A\n11199A002,Student Name Two,B'
+        // Matches SAMPLE DATA.xlsx column layout used by faculty mark sheets
+        const csvContent = [
+            'Register. No.,Name of the Candidate,Section,FIRST INTERNAL TEST(15),SECOND INTERNAL TEST(15),ATTENDANCE ASSIGNMENT(10),Final(40.00)',
+            '11249A002,ACHARI GANESH,S1,7,12,,19',
+            '11249A006,AGNIHOTRAM PURNIMA SAI SRI VYSHNAVI,S1,A,13,,13',
+            '11249A011,AKKANA VENKATA MADHUSUDHAN,S2,A,A,,0',
+        ].join('\n')
         const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
         const link = document.createElement('a')
         const url = URL.createObjectURL(blob)
         link.setAttribute('href', url)
-        link.setAttribute('download', 'theory_students_sample.csv')
+        link.setAttribute('download', 'theory_assessment_sample.csv')
         link.style.visibility = 'hidden'
         document.body.appendChild(link)
         link.click()
@@ -511,7 +552,206 @@ export default function AssessmentTheoryPage() {
         studentFileInputRef.current?.click()
     }
 
-    const handleStudentFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const mapImportedRows = (rows: Record<string, unknown>[]): ImportedStudentWithMarks[] => {
+        const imported = rows
+            .map((row) => {
+                const registrationno = String(
+                    pickRowValue(row, [
+                        'registerno',
+                        'registrationno',
+                        'registernumber',
+                        'regno',
+                        'studentid',
+                        'student_id',
+                    ]) ?? ''
+                ).trim()
+                const name = String(
+                    pickRowValue(row, [
+                        'nameofthecandidate',
+                        'name',
+                        'studentname',
+                        'candidate',
+                    ]) ?? ''
+                ).trim()
+                const section = String(pickRowValue(row, ['section', 'sec']) ?? '').trim()
+
+                if (!registrationno || !name) return null
+
+                return {
+                    registrationno,
+                    name,
+                    section: section || undefined,
+                    internal_1: parseMarkValue(
+                        pickRowValue(row, [
+                            'firstinternaltest15',
+                            'firstinternaltest',
+                            'firstinternal',
+                            'internal1',
+                            'internal_1',
+                        ]),
+                        15
+                    ),
+                    internal_2: parseMarkValue(
+                        pickRowValue(row, [
+                            'secondinternaltest15',
+                            'secondinternaltest',
+                            'secondinternal',
+                            'internal2',
+                            'internal_2',
+                        ]),
+                        15
+                    ),
+                    assignment_attendance: parseMarkValue(
+                        pickRowValue(row, [
+                            'attendanceassignment10',
+                            'attendanceassignment',
+                            'assignmentattendance',
+                            'attendance',
+                        ]),
+                        10
+                    ),
+                } as ImportedStudentWithMarks
+            })
+            .filter(Boolean) as ImportedStudentWithMarks[]
+
+        const unique = new Map<string, ImportedStudentWithMarks>()
+        imported.forEach((student) => {
+            if (!unique.has(student.registrationno)) {
+                unique.set(student.registrationno, student)
+            }
+        })
+        return Array.from(unique.values())
+    }
+
+    const saveImportedMarks = async (studentList: ImportedStudentWithMarks[]) => {
+        if (!selectedSubject) return
+
+        const withMarks = studentList.filter(
+            (s) =>
+                s.internal_1 !== undefined ||
+                s.internal_2 !== undefined ||
+                s.assignment_attendance !== undefined
+        )
+        if (withMarks.length === 0) return
+
+        const { data: { user } } = await supabase.auth.getUser()
+        if (!user) return
+
+        const assessments = withMarks.map((student) => ({
+            staff_id: user.id,
+            subject: selectedSubject,
+            student_id: student.registrationno,
+            internal_1: student.internal_1 !== undefined ? student.internal_1 : null,
+            internal_2: student.internal_2 !== undefined ? student.internal_2 : null,
+            assignment_attendance:
+                student.assignment_attendance !== undefined ? student.assignment_attendance : null,
+        }))
+
+        const registrationNos = assessments.map((a) => a.student_id)
+        const { data: existing } = await supabase
+            .from('assessment_theory')
+            .select('id, student_id')
+            .eq('staff_id', user.id)
+            .eq('subject', selectedSubject)
+            .in('student_id', registrationNos)
+
+        const existingMap = new Map(existing?.map((e) => [e.student_id, e.id]) || [])
+        const toInsert = assessments.filter((a) => !existingMap.has(a.student_id))
+        const toUpdate = assessments.filter((a) => existingMap.has(a.student_id))
+
+        if (toInsert.length > 0) {
+            const { error } = await supabase.from('assessment_theory').insert(toInsert)
+            if (error) throw error
+        }
+
+        for (const assessment of toUpdate) {
+            const id = existingMap.get(assessment.student_id)
+            if (!id) continue
+            const { error } = await supabase
+                .from('assessment_theory')
+                .update({
+                    internal_1: assessment.internal_1,
+                    internal_2: assessment.internal_2,
+                    assignment_attendance: assessment.assignment_attendance,
+                })
+                .eq('id', id)
+            if (error) throw error
+        }
+    }
+
+    const applyImportedStudents = async (rows: Record<string, unknown>[]) => {
+        const headers = rows.length > 0 ? Object.keys(rows[0]).map(normalizeHeader) : []
+        const hasRegister = headers.some((h) =>
+            ['registerno', 'registrationno', 'registernumber', 'regno', 'studentid'].includes(h)
+        )
+        const hasName = headers.some((h) =>
+            ['nameofthecandidate', 'name', 'studentname', 'candidate'].includes(h)
+        )
+
+        if (!hasRegister || !hasName) {
+            alert(
+                'Invalid file format.\n\nExpected columns like SAMPLE DATA.xlsx:\n' +
+                    'Register. No., Name of the Candidate, FIRST INTERNAL TEST(15), SECOND INTERNAL TEST(15), ATTENDANCE ASSIGNMENT(10), Final(40.00)\n\n' +
+                    'Download the sample CSV and use that format.'
+            )
+            return
+        }
+
+        const uniqueStudents = mapImportedRows(rows)
+        if (uniqueStudents.length === 0) {
+            alert('No valid student rows found. Each row needs Register No and Name.')
+            return
+        }
+
+        const defaultSection =
+            selectedSection && selectedSection !== 'ALL' ? selectedSection : undefined
+        const rosterOnly: ImportedStudent[] = uniqueStudents.map(
+            ({ registrationno, name, section }) => ({
+                registrationno,
+                name,
+                section: section || defaultSection,
+            })
+        )
+        // Keep mark rows aligned with roster section defaults
+        uniqueStudents.forEach((student) => {
+            if (!student.section && defaultSection) student.section = defaultSection
+        })
+
+        const marksCount = uniqueStudents.filter(
+            (s) =>
+                s.internal_1 !== undefined ||
+                s.internal_2 !== undefined ||
+                s.assignment_attendance !== undefined
+        ).length
+
+        // Persist first, then update UI so marks refresh finds saved rows
+        await saveRoster(rosterOnly)
+
+        try {
+            await saveImportedMarks(uniqueStudents)
+            resetStudentListState()
+            setHasSearched(true)
+            setStudents(rosterOnly)
+            setRosterLoaded(true)
+            alert(
+                marksCount > 0
+                    ? `Imported ${uniqueStudents.length} student(s) and saved marks for ${marksCount}.`
+                    : `Imported ${uniqueStudents.length} student(s).`
+            )
+        } catch (error: any) {
+            console.error('Failed to save imported marks', error)
+            resetStudentListState()
+            setHasSearched(true)
+            setStudents(rosterOnly)
+            setRosterLoaded(true)
+            alert(
+                `Imported ${uniqueStudents.length} student(s), but marks could not be saved: ` +
+                    (error.message || 'Unknown error')
+            )
+        }
+    }
+
+    const handleStudentFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
         const file = event.target.files?.[0]
         if (!file) return
 
@@ -524,87 +764,41 @@ export default function AssessmentTheoryPage() {
         setImportingStudents(true)
         setStudentError(null)
 
-        Papa.parse(file, {
-            header: true,
-            skipEmptyLines: true,
-            complete: (results) => {
-                const fileHeaders = results.meta?.fields ?? []
-                const normalized = fileHeaders.map((h) => String(h).trim().toLowerCase())
-                const hasRegister = normalized.some((h) =>
-                    ['registrationno', 'register_no', 'register_number', 'reg_no', 'student_id', 'studentid'].includes(h)
-                )
-                const hasName = normalized.some((h) => ['name', 'student_name', 'studentname'].includes(h))
-
-                if (!hasRegister || !hasName) {
-                    alert(
-                        'Invalid CSV format.\n\nExpected columns: registrationno, name, section (optional)\n\nDownload the sample CSV and use that format.'
-                    )
-                    setImportingStudents(false)
-                    if (studentFileInputRef.current) studentFileInputRef.current.value = ''
-                    return
-                }
-
-                const rows = results.data as any[]
-                const imported = rows
-                    .map((row) => {
-                        const registrationno = String(
-                            row.registrationno ||
-                                row.RegisterNo ||
-                                row.register_no ||
-                                row.Register_No ||
-                                row.register_number ||
-                                row.reg_no ||
-                                row.RegNo ||
-                                row.student_id ||
-                                row.StudentId ||
-                                row.StudentID ||
-                                ''
-                        ).trim()
-                        const name = String(
-                            row.name || row.Name || row.student_name || row.StudentName || row.Student_Name || ''
-                        ).trim()
-                        const section = String(
-                            row.section || row.Section || row.sec || row.Sec || ''
-                        ).trim()
-
-                        if (!registrationno || !name) return null
-                        return {
-                            registrationno,
-                            name,
-                            section: section || undefined,
-                        }
-                    })
-                    .filter(Boolean) as Array<{ registrationno: string; name: string; section?: string }>
-
-                // Keep first occurrence when register numbers repeat
-                const unique = new Map<string, { registrationno: string; name: string; section?: string }>()
-                imported.forEach((student) => {
-                    if (!unique.has(student.registrationno)) {
-                        unique.set(student.registrationno, student)
-                    }
+        try {
+            const lowerName = file.name.toLowerCase()
+            if (lowerName.endsWith('.xlsx') || lowerName.endsWith('.xls')) {
+                const buffer = await file.arrayBuffer()
+                const workbook = XLSX.read(buffer, { type: 'array' })
+                const sheetName = workbook.SheetNames[0]
+                const sheet = workbook.Sheets[sheetName]
+                const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, {
+                    defval: '',
+                    raw: false,
                 })
-                const uniqueStudents = Array.from(unique.values())
-
-                if (uniqueStudents.length === 0) {
-                    alert('No valid student rows found. Each row needs registrationno and name.')
-                    setImportingStudents(false)
-                    if (studentFileInputRef.current) studentFileInputRef.current.value = ''
-                    return
-                }
-
-                resetStudentListState()
-                setHasSearched(true)
-                setStudents(uniqueStudents)
-                setImportingStudents(false)
-                if (studentFileInputRef.current) studentFileInputRef.current.value = ''
-                void saveRoster(uniqueStudents)
-            },
-            error: (error) => {
-                alert('Error parsing CSV: ' + error.message)
-                setImportingStudents(false)
-                if (studentFileInputRef.current) studentFileInputRef.current.value = ''
-            },
-        })
+                await applyImportedStudents(rows)
+            } else {
+                await new Promise<void>((resolve, reject) => {
+                    Papa.parse(file, {
+                        header: true,
+                        skipEmptyLines: true,
+                        complete: async (results) => {
+                            try {
+                                await applyImportedStudents(results.data as Record<string, unknown>[])
+                                resolve()
+                            } catch (err) {
+                                reject(err)
+                            }
+                        },
+                        error: (error) => reject(error),
+                    })
+                })
+            }
+        } catch (error: any) {
+            alert('Error parsing file: ' + (error.message || 'Unknown error'))
+        } finally {
+            setImportingStudents(false)
+            if (studentFileInputRef.current) studentFileInputRef.current.value = ''
+        }
     }
 
     // Fetch marks when subject or students change
@@ -652,7 +846,11 @@ export default function AssessmentTheoryPage() {
             alert('Please select a subject first.')
             return
         }
-        setNewStudent({ registrationno: '', name: '', section: '' })
+        setNewStudent({
+            registrationno: '',
+            name: '',
+            section: selectedSection !== 'ALL' ? selectedSection : '',
+        })
         setAddStudentOpen(true)
     }
 
@@ -1001,24 +1199,42 @@ export default function AssessmentTheoryPage() {
                 <Card className="border-t-4 border-t-indigo-500 shadow-md">
                     <CardContent className="pt-6">
                         <div className="flex flex-col sm:flex-row sm:items-end gap-4 justify-between">
-                            <div className="space-y-2 flex-1 min-w-[240px] max-w-md">
-                                <label className="text-sm font-medium">Subject</label>
-                                <Select
-                                    value={selectedSubject}
-                                    onValueChange={handleSubjectChange}
-                                    disabled={loadingSubjects || subjects.length === 0}
-                                >
-                                    <SelectTrigger>
-                                        <SelectValue placeholder={loadingSubjects ? 'Loading...' : 'Select Subject'} />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        {subjects.map((subject) => (
-                                            <SelectItem key={subject.displayName} value={subject.displayName}>
-                                                {subject.displayName}
-                                            </SelectItem>
-                                        ))}
-                                    </SelectContent>
-                                </Select>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 flex-1 min-w-[240px] max-w-2xl">
+                                <div className="space-y-2">
+                                    <label className="text-sm font-medium">Subject</label>
+                                    <Select
+                                        value={selectedSubject}
+                                        onValueChange={handleSubjectChange}
+                                        disabled={loadingSubjects || subjects.length === 0}
+                                    >
+                                        <SelectTrigger>
+                                            <SelectValue placeholder={loadingSubjects ? 'Loading...' : 'Select Subject'} />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            {subjects.map((subject) => (
+                                                <SelectItem key={subject.displayName} value={subject.displayName}>
+                                                    {subject.displayName}
+                                                </SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                </div>
+                                <div className="space-y-2">
+                                    <label className="text-sm font-medium">Section</label>
+                                    <Select value={selectedSection} onValueChange={setSelectedSection}>
+                                        <SelectTrigger>
+                                            <SelectValue placeholder="All Sections" />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            <SelectItem value="ALL">All Sections</SelectItem>
+                                            {SECTION_OPTIONS.map((sec) => (
+                                                <SelectItem key={sec} value={sec}>
+                                                    {sec}
+                                                </SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                </div>
                             </div>
                             <p className="text-sm text-gray-500">
                                 {students.length} student(s) saved for this subject
@@ -1035,8 +1251,8 @@ export default function AssessmentTheoryPage() {
                     </CardTitle>
                     <CardDescription>
                         {showImportSetup
-                            ? 'Select subject and import students once. The list will be saved and shown automatically next time.'
-                            : 'Choose how to load students: university list (current) or import register number and name from CSV.'}
+                            ? 'Select subject and section, then import SAMPLE DATA Excel/CSV once. Marks and section are saved automatically.'
+                            : 'Choose how to load students: university list (current) or import SAMPLE DATA Excel/CSV with internals, attendance, and section.'}
                     </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
@@ -1084,7 +1300,7 @@ export default function AssessmentTheoryPage() {
                                     </SelectTrigger>
                                     <SelectContent>
                                         <SelectItem value="api">University list (current)</SelectItem>
-                                        <SelectItem value="import">Import CSV (Register No + Name)</SelectItem>
+                                        <SelectItem value="import">Import Excel/CSV (SAMPLE DATA marks)</SelectItem>
                                     </SelectContent>
                                 </Select>
                             </div>
@@ -1100,6 +1316,23 @@ export default function AssessmentTheoryPage() {
                                     {subjects.map((subject) => (
                                         <SelectItem key={subject.displayName} value={subject.displayName}>
                                             {subject.displayName}
+                                        </SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                        </div>
+
+                        <div className="space-y-2">
+                            <label className="text-sm font-medium">Section</label>
+                            <Select value={selectedSection} onValueChange={setSelectedSection}>
+                                <SelectTrigger>
+                                    <SelectValue placeholder="All Sections" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="ALL">All Sections</SelectItem>
+                                    {SECTION_OPTIONS.map((sec) => (
+                                        <SelectItem key={sec} value={sec}>
+                                            {sec}
                                         </SelectItem>
                                     ))}
                                 </SelectContent>
@@ -1186,7 +1419,7 @@ export default function AssessmentTheoryPage() {
                                 onClick={downloadStudentSample}
                             >
                                 <Download className="mr-2 h-4 w-4" />
-                                Sample CSV
+                                Sample File
                             </Button>
                             <Button
                                 type="button"
@@ -1211,7 +1444,7 @@ export default function AssessmentTheoryPage() {
                                 ) : (
                                     <>
                                         <Upload className="mr-2 h-4 w-4" />
-                                        Import Students CSV
+                                        Import Excel / CSV
                                     </>
                                 )}
                             </Button>
@@ -1224,7 +1457,7 @@ export default function AssessmentTheoryPage() {
             <input
                 ref={studentFileInputRef}
                 type="file"
-                accept=".csv,text/csv"
+                accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
                 className="hidden"
                 onChange={handleStudentFileUpload}
             />
@@ -1261,7 +1494,7 @@ export default function AssessmentTheoryPage() {
                                         disabled={importingStudents}
                                     >
                                         <Upload className="mr-2 h-4 w-4" />
-                                        Re-import CSV
+                                        Re-import Excel / CSV
                                     </Button>
                                 )}
 
@@ -1278,14 +1511,16 @@ export default function AssessmentTheoryPage() {
                                             </SelectTrigger>
                                             <SelectContent>
                                                 <SelectItem value="ALL">All Sections</SelectItem>
-                                                {Array.from(new Set(students.map(s => s.section || 'Unknown')))
-                                                    .sort()
-                                                    .map((sec: any) => (
-                                                        <SelectItem key={sec} value={sec}>
-                                                            Section {sec}
-                                                        </SelectItem>
-                                                    ))
-                                                }
+                                                {Array.from(
+                                                    new Set([
+                                                        ...SECTION_OPTIONS,
+                                                        ...students.map((s) => s.section || '').filter(Boolean),
+                                                    ])
+                                                ).map((sec) => (
+                                                    <SelectItem key={sec} value={sec}>
+                                                        Section {sec}
+                                                    </SelectItem>
+                                                ))}
                                             </SelectContent>
                                         </Select>
                                     </div>
@@ -1578,13 +1813,25 @@ export default function AssessmentTheoryPage() {
                             />
                         </div>
                         <div className="space-y-2">
-                            <Label htmlFor="new-section">Section (optional)</Label>
-                            <Input
-                                id="new-section"
-                                placeholder="e.g. A"
-                                value={newStudent.section}
-                                onChange={(e) => setNewStudent({ ...newStudent, section: e.target.value })}
-                            />
+                            <Label htmlFor="new-section">Section</Label>
+                            <Select
+                                value={newStudent.section || 'NONE'}
+                                onValueChange={(v) =>
+                                    setNewStudent({ ...newStudent, section: v === 'NONE' ? '' : v })
+                                }
+                            >
+                                <SelectTrigger id="new-section">
+                                    <SelectValue placeholder="Select section" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="NONE">—</SelectItem>
+                                    {SECTION_OPTIONS.map((sec) => (
+                                        <SelectItem key={sec} value={sec}>
+                                            {sec}
+                                        </SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
                         </div>
                         <div className="flex justify-end gap-2 pt-2">
                             <Button type="button" variant="outline" onClick={() => setAddStudentOpen(false)}>

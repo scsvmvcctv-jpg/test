@@ -109,20 +109,27 @@ export function Header() {
                             </Button>
                         </div>
                         <nav className="flex-1 space-y-2 overflow-y-auto">
-                            {items.map((item) => (
+                            {items.map((item) => {
+                                const isActive =
+                                    pathname === item.href ||
+                                    (item.href !== '/admin' &&
+                                        item.href !== '/dashboard' &&
+                                        pathname.startsWith(item.href))
+                                return (
                                 <Link key={item.href} href={item.href} onClick={() => setIsMobileMenuOpen(false)}>
                                     <Button
                                         variant="ghost"
                                         className={cn(
                                             "w-full justify-start gap-3 text-blue-100 hover:text-white hover:bg-white/10",
-                                            pathname === item.href && "bg-white/20 text-white font-medium"
+                                            isActive && "bg-white/20 text-white font-medium"
                                         )}
                                     >
                                         <item.icon className="w-5 h-5" />
                                         {item.name}
                                     </Button>
                                 </Link>
-                            ))}
+                                )
+                            })}
                         </nav>
                         <div className="mt-4 pt-4 border-t border-blue-700/50">
                             <Button variant="ghost" className="w-full justify-start gap-3 text-red-300 hover:text-red-200 hover:bg-red-900/30" onClick={handleLogout}>

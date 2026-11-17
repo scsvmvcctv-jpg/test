@@ -1,8 +1,9 @@
 'use server'
 
 import { cookies } from 'next/headers'
+import { getApiBaseUrl as getBaseApiUrl } from '@/lib/utils'
 
-const getApiBaseUrl = () => (process.env.API_BASE_URL || '').replace(/\/$/, '') + '/api';
+const getApiBaseUrl = () => `${getBaseApiUrl()}/api`;
 
 export async function fetchFilterOptions() {
     try {

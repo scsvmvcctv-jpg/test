@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import sql from 'mssql';
 import { signAdminToken } from '@/lib/admin-token';
+import { getApiBaseUrl } from '@/lib/utils';
 
 const dbConfig = {
   user: process.env.DB_USER,
@@ -26,13 +27,7 @@ export async function POST(req: Request) {
 
     // Supervisor / HOD: proxy to external auth, then re-sign token for local APIs
     if (/^Supervisor$/i.test(userTypeStr) || /^HOD$/i.test(userTypeStr)) {
-      const base = (process.env.API_BASE_URL || '').replace(/\/$/, '');
-      if (!base) {
-        return NextResponse.json(
-          { error: 'Admin login requires API_BASE_URL in .env' },
-          { status: 503 }
-        );
-      }
+      const base = getApiBaseUrl();
       const apiUrl = `${base}/api/admin-login`;
       const body = {
         UserId: typeof UserId === 'string' ? UserId.trim() : UserId,
@@ -66,13 +61,7 @@ export async function POST(req: Request) {
     }
 
     if (isOfficer) {
-      const base = (process.env.API_BASE_URL || '').replace(/\/$/, '');
-      if (!base) {
-        return NextResponse.json(
-          { error: 'Officers login requires API_BASE_URL in .env' },
-          { status: 503 }
-        );
-      }
+      const base = getApiBaseUrl();
       const apiUrl = `${base}/api/admin-login`;
       const body = {
         UserId: typeof UserId === 'string' ? UserId.trim() : UserId,

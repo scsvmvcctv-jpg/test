@@ -1,6 +1,7 @@
 import sql from 'mssql';
 import nodemailer from 'nodemailer';
 import { getCurrentYearInAppTz } from '@/lib/datetime';
+import { getApiBaseUrl } from '@/lib/utils';
 
 const dbConfig = {
     user: process.env.DB_USER,
@@ -22,7 +23,7 @@ export async function findUserCredentials(email: string, userType: string) {
     if (userType !== 'Supervisor') {
         try {
             console.log('Attempting to fetch credentials from external API...');
-            const apiBase = (process.env.API_BASE_URL || '').replace(/\/$/, '');
+            const apiBase = getApiBaseUrl();
             const apiResponse = await fetch(`${apiBase}/api/forgot-username-password/`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },

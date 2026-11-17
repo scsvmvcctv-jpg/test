@@ -5,6 +5,7 @@ import { createClient as createSupabaseAdmin } from '@supabase/supabase-js'
 import { cookies } from 'next/headers'
 import { findUserCredentials, sendCredentialsEmail } from '@/lib/auth-service'
 import { signAdminToken } from '@/lib/admin-token'
+import { getApiBaseUrl } from '@/lib/utils'
 
 function getBaseUrl() {
     if (process.env.NEXT_PUBLIC_APP_URL) {
@@ -27,7 +28,7 @@ export async function loginAction(prevState: any, formData: FormData) {
 
     // --- MOCK MODE HANDLING ---
     // If using the mock password (provided by forgot-password in mock mode),
-    // bypass external API and Supabase auth.
+    // bypass external API and establish a Supabase session for local dev / POC screenshots.
     if (password === 'mock-password-123') {
         console.log('MOCK MODE: Logging in with mock credentials');
         const cookieStore = await cookies()
@@ -38,15 +39,91 @@ export async function loginAction(prevState: any, formData: FormData) {
             path: '/',
             maxAge: 3600 // 1 hour
         })
+
+        const supabase = await createClient()
+        const mockEmail = `${userId.trim() || 'demo'}@mock.kanchiuniv.ac.in`
+        const mockPassword = 'mock-password-123'
+        const mockProfile = {
+            full_name: `Demo Faculty (${userType})`,
+            emp_id: 'DEMO001',
+            user_id_external: userId.trim() || 'demo',
+            department_name: 'Computer Science and Engg.',
+            designation_name: 'Assistant Professor',
+        }
+
+        if (process.env.SUPABASE_SERVICE_ROLE_KEY && process.env.NEXT_PUBLIC_SUPABASE_URL) {
+            try {
+                const admin = createSupabaseAdmin(
+                    process.env.NEXT_PUBLIC_SUPABASE_URL,
+                    process.env.SUPABASE_SERVICE_ROLE_KEY
+                )
+                const { data: listData } = await admin.auth.admin.listUsers({ page: 1, perPage: 1000 })
+                const existing = listData?.users?.find((u) => u.email?.toLowerCase() === mockEmail.toLowerCase())
+                if (existing?.id) {
+                    await admin.auth.admin.updateUserById(existing.id, {
+                        password: mockPassword,
+                        user_metadata: mockProfile,
+                    })
+                } else {
+                    await admin.auth.admin.createUser({
+                        email: mockEmail,
+                        password: mockPassword,
+                        email_confirm: true,
+                        user_metadata: mockProfile,
+                    })
+                }
+            } catch (adminErr) {
+                console.error('MOCK MODE: Admin user setup failed:', adminErr)
+            }
+        }
+
+        let { error: signInError } = await supabase.auth.signInWithPassword({
+            email: mockEmail,
+            password: mockPassword,
+        })
+
+        if (signInError) {
+            const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
+                email: mockEmail,
+                password: mockPassword,
+                options: { data: mockProfile },
+            })
+            if (signUpError) {
+                console.error('MOCK MODE: Supabase signUp failed:', signUpError.message)
+                return { error: `Mock login failed: ${signUpError.message}` }
+            }
+            if (!signUpData.session) {
+                const retry = await supabase.auth.signInWithPassword({
+                    email: mockEmail,
+                    password: mockPassword,
+                })
+                signInError = retry.error
+            }
+        }
+
+        if (signInError) {
+            console.error('MOCK MODE: Supabase signIn failed:', signInError.message)
+            return { error: `Mock login failed: ${signInError.message}` }
+        }
+
+        const { data: { user: sbUser } } = await supabase.auth.getUser()
+        if (sbUser) {
+            await supabase.from('profiles').upsert({
+                id: sbUser.id,
+                ...mockProfile,
+                updated_at: new Date().toISOString(),
+            })
+        }
+
         return { success: true, role: userType }
     }
 
     try {
-        const base = (process.env.API_BASE_URL || '').replace(/\/$/, '');
-        let apiUrl = `${base}/api/auth`;
+        const apiBase = getApiBaseUrl();
+        let apiUrl = `${apiBase}/api/auth`;
         if (userType === 'Supervisor') {
             // Use local API for Supervisor to ensure updated logic is used
-            apiUrl = `${base}/api/admin-login`;
+            apiUrl = `${apiBase}/api/admin-login`;
         }
         console.log('Using API URL:', apiUrl);
 

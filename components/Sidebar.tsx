@@ -14,7 +14,8 @@ import {
     FlaskConical,
     Search,
     LogOut,
-    Users
+    Users,
+    BarChart3,
 } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { useRouter } from 'next/navigation'
@@ -34,6 +35,7 @@ export const sidebarItems = [
 
 export const adminSidebarItems = [
     { name: 'Dashboard', href: '/admin', icon: LayoutDashboard },
+    { name: 'Reports', href: '/admin/reports', icon: BarChart3 },
 ]
 
 export function Sidebar() {
@@ -76,20 +78,27 @@ export function Sidebar() {
                 <h1 className="text-lg font-bold text-center text-white tracking-wide">SCSVMV-LOG-BOOK</h1>
             </div>
             <nav className="flex-1 px-4 space-y-2 overflow-y-auto py-4">
-                {items.map((item) => (
+                {items.map((item) => {
+                    const isActive =
+                        pathname === item.href ||
+                        (item.href !== '/admin' &&
+                            item.href !== '/dashboard' &&
+                            pathname.startsWith(item.href))
+                    return (
                     <Link key={item.href} href={item.href}>
                         <Button
                             variant="ghost"
                             className={cn(
                                 "w-full justify-start gap-3 text-blue-100 hover:text-white hover:bg-white/10 transition-all duration-200",
-                                pathname === item.href && "bg-white/20 text-white font-medium shadow-sm"
+                                isActive && "bg-white/20 text-white font-medium shadow-sm"
                             )}
                         >
                             <item.icon className="w-5 h-5" />
                             {item.name}
                         </Button>
                     </Link>
-                ))}
+                    )
+                })}
             </nav>
             <div className="p-4 border-t border-blue-700/50 bg-blue-900/50">
                 <Button variant="ghost" className="w-full justify-start gap-3 text-red-300 hover:text-red-200 hover:bg-red-900/30" onClick={handleLogout}>
